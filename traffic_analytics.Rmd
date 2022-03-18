@@ -1,0 +1,1426 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*.
+```{r}
+library(plotly)
+library(ggplot2)
+#library(tidyverse)
+library(tibble)
+library(dplyr)
+library(tidyr)
+library("RColorBrewer")
+library(geojsonR)
+library("purrr")
+library("sf")
+rgdal::getGDALVersionInfo(str = "--version")
+library(chron)
+library("lubridate")
+library(leaflet)
+library(leaflet.extras)
+library(magrittr)
+library(tmap)
+library("sf")
+library("rgdal")
+library(mapview)
+library(ggmap)
+library(plyr)
+#install.packages("ggmap")
+library(leafsync)
+library(leaflegend)
+library(raster)
+library(magick)
+library(caTools)
+library(scales)
+##library(leafletR)
+#install.packages('leafletR')
+#install.packages("leaflegend")
+#install.packages("leaflet.extras")
+#install.packages("jsonlite", type = "source")
+#remove.packages("rgdal")
+library(devtools)
+library(geojsonio)
+#install_github("r-spatial/sf")
+#install.packages("geojsonR")
+#devtools::install_version("tidyverse", version = "1.1.1", repos = "http://cran.us.r-project.org")*/
+#rm(list = ls())
+```
+```{r}
+#h3(paste0("")),
+#h2(paste0("Short, medium, and long term growth")),
+#p("Compound annual growth rate (CAGR) for the past 1, 5, 10 and 20 years")
+```
+
+
+
+
+```{r}
+#install.packages("tidyverse")
+uk_traffic_data <- read.csv("uk-data/dft_traffic_counts_aadf.csv",
+                            header = T, sep = ",")
+tail(uk_traffic_data)
+#getwd()
+#rm(list = ls())
+```
+
+
+```{r}
+uk_traffic_data%>%
+gather(x, value, count_point_id:all_motor_vehicles)%>%
+group_by(x)%>%
+tally(value == "NULL")
+```
+```{r}
+#drop two columns
+dropCols = c("start_junction_road_name", "end_junction_road_name")
+
+uk_traffic_data <- uk_traffic_data[ , !(names(uk_traffic_data) %in% dropCols)]
+```
+
+```{r}
+#drop rows with NULL
+uk_traffic_data <- uk_traffic_data %>% filter_all(all_vars(!grepl("NULL", .)))
+#check if there is no more null values
+uk_traffic_data%>%
+gather(x, value, count_point_id:all_motor_vehicles)%>%
+group_by(x)%>%
+tally(value == "NULL")
+```
+
+```{r}
+names(uk_traffic_data)
+uk_traffic_data$all_vehicles <- rowSums(uk_traffic_data[,c("all_hgvs","all_motor_vehicles", "pedal_cycles")])
+#calculate miles driven i.e. volume of traffic
+vehicles = c('pedal_cycles', 'two_wheeled_motor_vehicles', 'cars_and_taxis', 'buses_and_coaches', 'lgvs',
+             'hgvs_2_rigid_axle', 'hgvs_3_rigid_axle','hgvs_3_or_4_articulated_axle', 'hgvs_4_or_more_rigid_axle', 
+            'hgvs_5_articulated_axle', 'hgvs_6_articulated_axle', 'all_hgvs', 'all_motor_vehicles', 'all_vehicles')
+
+uk_traffic_data[, 'link_length_miles'] <- as.numeric(uk_traffic_data[, 'link_length_miles'])
+for(col in vehicles) {
+  uk_traffic_data[, paste(col,"miles_driven", sep="_")] <- uk_traffic_data[, col]*365*uk_traffic_data[, 'link_length_miles']
+  }
+```
+
+```{r}
+paste("num of rows:", nrow(uk_traffic_data), "num of columns:", ncol(uk_traffic_data))
+###the AADF values for MB and MCU are Zero
+uk_traffic_data <- subset(uk_traffic_data, road_category !="MCU")
+uk_traffic_data <- subset(uk_traffic_data, road_category !="MB")
+unique(uk_traffic_data$road_category)
+```
+```{r}
+uk_traffic_data <- uk_traffic_data %>% 
+  mutate(road_category, road_category = case_when(road_category=="PA"~'Class A Principal Road', 
+                                                  road_category=="TM"~"M or Class A Trunk Motorway",
+                                                  road_category=="TA"~'Class A Trunk Road', 
+                                                  road_category=="PM"~"M or Class A Principal Motorway",
+                                                  TRUE ~ road_category))
+#exclude max northing grid
+uk_traffic_data <- subset(uk_traffic_data, northing != max(uk_traffic_data$northing))
+paste("num of rows:", nrow(uk_traffic_data), "num of columns:", ncol(uk_traffic_data))
+```
+```{r}
+names(uk_traffic_data)
+vehicles_miles <- c("pedal_cycles_miles_driven", "two_wheeled_motor_vehicles_miles_driven", "cars_and_taxis_miles_driven", "buses_and_coaches_miles_driven", "lgvs_miles_driven", "hgvs_2_rigid_axle_miles_driven", "hgvs_3_rigid_axle_miles_driven", "hgvs_3_or_4_articulated_axle_miles_driven", "hgvs_4_or_more_rigid_axle_miles_driven", "hgvs_5_articulated_axle_miles_driven", "hgvs_6_articulated_axle_miles_driven", "all_hgvs_miles_driven", "all_motor_vehicles_miles_driven", "all_vehicles_miles_driven")
+
+#uk_traffic_data[, vehicles_miles]
+```
+
+```{r}
+names(uk_traffic_data)
+uk_traffic_flow <- uk_traffic_data %>% 
+  dplyr::select(year, all_vehicles_miles_driven, region_name) %>%
+  dplyr::group_by(year, region_name) %>% 
+  dplyr::summarize(avg_traffic_flow = median(all_vehicles_miles_driven, na.rm = TRUE)) %>% 
+  dplyr::arrange(desc(year), desc(avg_traffic_flow))
+```
+
+```{r}
+syms <- c('square', 'square-open', 'square-dot', 'square-open-dot', 'diamond', 'diamond-open', 'diamond-dot', 'diamond-open-dot', 'cross', 'cross-open', 'cross-dot', 'cross-open-dot','star-dot', 'star-open-dot', 'hexagram', 'hexagram-open', 'hexagram-dot', 'hexagram-open-dot','star-triangle-up', 'star-triangle-up-open', 'star-triangle-up-dot', 'star-triangle-up-open-dot', 'star-triangle-down', 'star-triangle-down-open', 'star-triangle-down-dot', 'star-triangle-down-open-dot', 'star-square','star-square-open', 'star-square-dot', 'star-square-open-dot',  'hash', 'hash-open', 'hash-dot', 'hash-open-dot', 'triangle-up', 'triangle-up-open', 'triangle-up-dot', 'triangle-up-open-dot', 'triangle-down', 'triangle-down-open', 'triangle-down-dot', 'triangle-down-open-dot', 'triangle-left', 'triangle-left-open', 'hourglass', 'hourglass-open', 'bowtie', 'bowtie-open', 'circle-cross', 'circle-cross-open', 'circle-x')
+l <- list(
+  font = list(
+    family = "Arial",
+    size = 14,
+    color = '#434C5E'),
+  bgcolor = "#d6d8da")
+#bg_color <- "rgba(0, 0, 0)"
+colors <- c('#962c39', '#a26e53', '#a1c078', 'darkslategrey', 'darkslateblue', '#7803d5',
+            "#6b3969", "#c4446b", "#b77168", "#123429", "#2c8160")
+
+fig <- plot_ly(uk_traffic_flow, x = ~year, y = ~avg_traffic_flow, type = 'scatter',
+               mode = 'markers', symbol = ~region_name, symbols = sample(syms,length(unique(uk_traffic_flow$region_name))),
+               colors = colors,
+               marker = list(size = 10, colors = colors), 
+               width = 800, height = 600) %>%
+  layout(title = list(text = 'Traffic Flow', font = t), 
+         paper_bgcolor = "#d6d8da",
+         plot_bgcolor = "#d6d8da",
+         xaxis = list(title = 'Regions in UK', font=t), 
+
+         yaxis = list(title = 'Volume of taffic (miles)', font=l))
+fig
+unique(uk_traffic_flow)
+```
+
+
+```{r}
+names(uk_traffic_data)
+#vehicles <- unlist(lapply(vehicles, function(x) paste(x,"miles_driven", sep="_")))
+uk_vehicles_traffic_data <- uk_traffic_data %>% 
+  dplyr::select(year,local_authority_name,local_authority_code, vehicles_miles, road_name, road_category, region_name) %>% 
+  pivot_longer(
+    cols = vehicles_miles,
+    names_to = "vehicles_names",
+    values_to = "vehicles_miles_driven"
+  )
+head(uk_vehicles_traffic_data, 10)
+
+uk_vehicles_traffic_num <- uk_traffic_data %>% 
+  dplyr::select(year,local_authority_name,local_authority_code, vehicles, road_name, road_category, region_name) %>% 
+  pivot_longer(
+    cols = vehicles,
+    names_to = "vehicles_names",
+    values_to = "num_of_vehicles"
+  )
+
+head(uk_vehicles_traffic_num, 10)
+
+uk_vehicles_region_summary <- uk_vehicles_traffic_data %>% 
+  dplyr::group_by(year, vehicles_names, region_name) %>% 
+  dplyr::summarise(avg_traffic_flow = sum(vehicles_miles_driven)) %>% 
+  dplyr::arrange(desc(year))
+
+unique(uk_vehicles_region_summary$vehicles_names)
+head(uk_vehicles_region_summary, 50)
+unique(uk_traffic_data$local_authority_name)
+names(uk_traffic_data)
+```
+```{r}
+recode_vehicles_names <- function (df) {
+  df <- df %>% 
+  mutate(vehicles_names, vehicles_names = case_when(vehicles_names=="all_hgvs_miles_driven"~'All Heavy Goods Vehicles',
+                                                  vehicles_names=="all_vehicles_miles_driven"~"All vehicles",
+                                                  vehicles_names=="all_motor_vehicles_miles_driven"~'All Motor Vehicles',
+                                                  vehicles_names=="buses_and_coaches_miles_driven"~"Buses and Coaches",
+                                                  vehicles_names=="cars_and_taxis_miles_driven"~'Cars and Taxis',
+                                                  vehicles_names=="hgvs_2_rigid_axle_miles_driven"~"2 rigid axle Heavy Goods Vehicles",
+                                                  vehicles_names=="hgvs_3_or_4_articulated_axle_miles_driven"~"3/4 rigid axle Heavy Goods Vehicles",
+                                                  vehicles_names=="hgvs_4_or_more_rigid_axle_miles_driven"~"4 or more rigid axle Heavy Goods Vehicles",
+                                                  vehicles_names=="hgvs_3_rigid_axle_miles_driven"~"3 rigid axle Heavy Goods Vehicles",
+                                                  vehicles_names=="hgvs_5_articulated_axle_miles_driven"~"5 articulated axle Heavy Goods Vehicles",
+                                                  vehicles_names=="hgvs_6_articulated_axle_miles_driven"~"6 articulated axle Heavy Goods Vehicles",
+                                                  vehicles_names=="lgvs_miles_driven"~"Lorries and Vans",
+                                                  vehicles_names=="pedal_cycles_miles_driven"~"Pedal Cycles",
+                                                  vehicles_names=="two_wheeled_motor_vehicles_miles_driven"~"Two wheeled motor vehicles",
+                                                  TRUE ~ vehicles_names))
+  return (df)
+  }
+uk_vehicles_region_summary <- recode_vehicles_names(uk_vehicles_region_summary)
+```
+
+```{r}
+uk_vehicles_region_summary
+names(uk_vehicles_traffic_data)
+##lad
+uk_vehicles_lad_summary <- uk_vehicles_traffic_data %>% 
+  dplyr::group_by(year, vehicles_names, region_name, local_authority_name, local_authority_code) %>% 
+  dplyr::summarise(avg_traffic_flow = sum(vehicles_miles_driven)) %>% 
+  dplyr::arrange(desc(year), desc(avg_traffic_flow))
+uk_vehicles_lad_summary
+
+##road name
+uk_vehicles_rd_summary <- uk_vehicles_traffic_data %>% 
+  dplyr::group_by(year, vehicles_names, region_name, road_name) %>% 
+  dplyr::summarise(avg_traffic_flow = sum(vehicles_miles_driven)) %>% 
+  dplyr::arrange(desc(year), desc(avg_traffic_flow))
+uk_vehicles_rd_summary
+
+uk_vehicles_lad_summary <- recode_vehicles_names(uk_vehicles_lad_summary)
+uk_vehicles_rd_summary <- recode_vehicles_names(uk_vehicles_rd_summary)
+
+uk_vehicles_lad_summary
+```
+```{r}
+uk_vehicles_region_sum <- uk_vehicles_traffic_num %>% 
+  dplyr::group_by(year, vehicles_names, region_name) %>% 
+  dplyr::summarise(vehicles_flow = sum(num_of_vehicles)) %>% 
+  dplyr::arrange(desc(year), desc(vehicles_flow))
+
+uk_vehicles_lad_sum <- uk_vehicles_traffic_num %>% 
+  dplyr::group_by(year, vehicles_names, region_name, local_authority_name, local_authority_code) %>% 
+  dplyr::summarise(vehicles_flow = sum(num_of_vehicles)) %>% 
+  dplyr::arrange(desc(year), desc(vehicles_flow))
+
+uk_vehicles_rd_sum <- uk_vehicles_traffic_num %>% 
+  dplyr::group_by(year, vehicles_names, region_name, road_name) %>% 
+  dplyr::summarise(vehicles_flow = sum(num_of_vehicles)) %>% 
+  dplyr::arrange(desc(year), desc(vehicles_flow))
+
+unique(uk_vehicles_traffic_num$vehicles_names)
+```
+```{r}
+rename_vehicles_names <- function (df) {
+  df <- df %>% 
+  mutate(vehicles_names, vehicles_names = case_when(vehicles_names=="all_hgvs"~'All Heavy Goods Vehicles',
+                                                  vehicles_names=="all_vehicles"~"All vehicles",
+                                                  vehicles_names=="all_motor_vehicles"~'All Motor Vehicles',
+                                                  vehicles_names=="buses_and_coaches"~"Buses and Coaches",
+                                                  vehicles_names=="cars_and_taxis"~'Cars and Taxis',
+                                                  vehicles_names=="hgvs_2_rigid_axle"~"2 rigid axle Heavy Goods Vehicles",
+                                                  vehicles_names=="hgvs_3_or_4_articulated_axle"~"3/4 rigid axle Heavy Goods Vehicles",
+                                                  vehicles_names=="hgvs_4_or_more_rigid_axle"~"4 or more rigid axle Heavy Goods Vehicles",
+                                                  vehicles_names=="hgvs_3_rigid_axle"~"3 rigid axle Heavy Goods Vehicles",
+                                                  vehicles_names=="hgvs_5_articulated_axle"~"5 articulated axle Heavy Goods Vehicles",
+                                                  vehicles_names=="hgvs_6_articulated_axle"~"6 articulated axle Heavy Goods Vehicles",
+                                                  vehicles_names=="lgvs"~"Lorries and Vans",
+                                                  vehicles_names=="pedal_cycles"~"Pedal Cycles",
+                                                  vehicles_names=="two_wheeled_motor_vehicles"~"Two wheeled motor vehicles",
+                                                  TRUE ~ vehicles_names))
+  return (df)
+}
+
+uk_vehicles_lad_sum <- rename_vehicles_names(uk_vehicles_lad_sum)
+uk_vehicles_rd_sum <- rename_vehicles_names(uk_vehicles_rd_sum)
+uk_vehicles_region_sum <- rename_vehicles_names(uk_vehicles_region_sum)
+
+uk_vehicles_rd_sum
+```
+```{r}
+syms <- c('square', 'square-open', 'square-dot', 'square-open-dot', 'diamond', 'diamond-open', 'diamond-dot', 'diamond-open-dot', 'cross', 'cross-open', 'cross-dot', 'cross-open-dot','star-dot', 'star-open-dot', 'hexagram', 'hexagram-open', 'hexagram-dot', 'hexagram-open-dot','star-triangle-up', 'star-triangle-up-open', 'star-triangle-up-dot', 'star-triangle-up-open-dot', 'star-triangle-down', 'star-triangle-down-open', 'star-triangle-down-dot', 'star-triangle-down-open-dot', 'star-square','star-square-open', 'star-square-dot', 'star-square-open-dot',  'hash', 'hash-open', 'hash-dot', 'hash-open-dot', 'triangle-up', 'triangle-up-open', 'triangle-up-dot', 'triangle-up-open-dot', 'triangle-down', 'triangle-down-open', 'triangle-down-dot', 'triangle-down-open-dot', 'triangle-left', 'triangle-left-open', 'hourglass', 'hourglass-open', 'bowtie', 'bowtie-open', 'circle-cross', 'circle-cross-open', 'circle-x')
+l <- list(
+  font = list(
+    family = "Arial",
+    size = 16,
+    color = '#434C5E'),
+  bgcolor = "#d6d8da")
+#bg_color <- "rgba(0, 0, 0)"
+colors <- c('#962c39', '#a26e53', '#a1c078', 'darkslategrey', 'darkslateblue', '#7803d5',
+            "#6b3969", "#c4446b", "#b77168", "#123429", "#2c8160")
+
+fig <- uk_vehicles_region_summary %>% 
+  filter(vehicles_names == "All Heavy Goods Vehicles") %>%
+  ungroup() %>%
+  plot_ly(x = ~year, y = ~avg_traffic_flow, type = 'scatter',
+               mode = 'markers', symbol = ~region_name, symbols = sample(syms,length(unique(uk_traffic_flow$region_name))),
+          colors = ~region_name,
+               marker = list(size = 10, colors = colors), 
+               width = 1200, height = 650) %>%
+  layout(title = list(text = '<b> Traffic Flow across Regions in UK </b>', 
+                      font = list(size = 18, color = '#434C5E', family = "Arial")),
+         margin = list(b = 120, t=100, l=180, r=180),
+         paper_bgcolor = "#d6d8da",
+         plot_bgcolor = "#d6d8da",
+         yaxis = list(title = 'Volume of taffic (miles)',
+                 titlefont = list(color='#434C5E', family = "Cambria", size = 18),
+                 tickfont = list(color='#434C5E', family = "Cambria", size = 18)),
+         xaxis = list(title = 'Years',
+                 titlefont = list(color='#434C5E', family = "Cambria", size = 18),
+                 tickfont = list(color='#434C5E', family = "Cambria", size = 18)),
+         legend = l)
+fig
+```
+```{r}
+colors <- c('#962c39', '#a26e53', '#a1c078', 'darkslategrey', 'darkslateblue', '#7803d5',
+            "#6b3969", "#c4446b", "#b77168", "#123429", "#2c8160", "#462c1e", "#e15497", "#083b5f", "#9f9e15",
+            "#1b667e", "#548ea3", "#c40041")
+fig <- uk_vehicles_region_summary %>% 
+  filter(vehicles_names == "Cars and Taxis") %>%
+  plot_ly(x = ~year, y = ~avg_traffic_flow, 
+               type = 'box',
+               marker = list(size = 10, 
+                             line = list(outliercolor = 'rgb(107,174,214)',
+                                         outlierwidth = 2)), 
+               width = 1200, height = 650,
+          line = list(color = 'rgb(7,40,89)'),
+          fillcolor ='rgb(107,174,214)', showlegend = FALSE) %>%
+  layout(title = list(text = '<b>Traffic Flow across Regions in UK</b>', 
+                      font = list(size = 18, color = '#434C5E', family = "Arial")),
+         xaxis = list(title = '',
+                      titlefont = list(color='#434C5E', family = "Cambria", size = 18),
+                      tickfont = list(color='#434C5E', family = "Cambria", size = 18)),
+         yaxis = list(title = 'Volume of taffic (miles)',
+                      titlefont = list(color='#434C5E', family = "Cambria", size = 18),
+                      tickfont = list(color='#434C5E', family = "Cambria", size = 18)),
+         paper_bgcolor = "#d6d8da",
+         plot_bgcolor = "#d6d8da",
+         margin = list(b = 140, t=100, l=100, r=100), showlegend = FALSE)
+fig
+
+uk_traffic_flow
+```
+```{r}
+uk_vehicles_region_summary <- uk_vehicles_region_summary[order(uk_vehicles_region_summary$year,
+                                                               uk_vehicles_region_summary$avg_traffic_flow,
+                                                               uk_vehicles_region_summary$region_name,
+                                                               uk_vehicles_region_summary$vehicles_names
+                                                               ),]
+uk_vehicles_region_summary
+#colorRampPalette(rev(brewer.pal(10, "RdBu")))(11)),
+fig <- uk_vehicles_region_summary %>% 
+  filter(vehicles_names == 'Cars and Taxis') %>%
+  ungroup() %>% plot_ly(x =~avg_traffic_flow, y =~region_name,
+               orientation = 'h',
+                marker = list(color = colorRampPalette(brewer.pal(10, "PuRd"))(11)),
+               frame = ~year,
+             width=800, height = 600, type = 'bar',
+             text = ~paste("Region:", region_name,
+                           '</br></br>', "Miles:", avg_traffic_flow,
+                           '</br></br>',"Year:", year),
+             hoverinfo = text,
+             showlegend = FALSE) %>%
+  layout(title = "<b> Miles Driven in UK </b>",
+         titlefont = list(size = 18, color = '#434C5E', family = "Arial"),
+         margin = list(b = 80, t=80, l=180, r=180),
+         plot_bgcolor  = "#d6d8da",
+         paper_bgcolor = "#d6d8da",
+         yaxis = list(title = "",
+                 titlefont = list(color='#434C5E', family = "Cambria", size = 16),
+                 tickfont = list(color='#434C5E', family = "Cambria", size = 16),
+                 categoryorder = "array",
+                 categoryarray = ~region_name),
+         xaxis = list(title = "Miles driven",
+                 titlefont = list(color='#434C5E', family = "Cambria", size = 16),
+                 tickfont = list(color='#434C5E', family = "Cambria", size = 16),
+                 tickangle = 45),
+         showlegend = FALSE)%>%
+  animation_slider( currentvalue = list(prefix = "Year: ", 
+                                        font = list(color='#434C5E', family = "Cambria", size = 16))
+  ) %>%
+
+  animation_opts(
+
+    1000, easing = "elastic", redraw = FALSE
+
+  )
+fig
+```
+
+```{r}
+uk_vehicles_region <- uk_vehicles_region_summary %>% 
+  inner_join(uk_vehicles_region_sum, by=c("year","vehicles_names", "region_name"))
+
+fig <- uk_vehicles_region %>% 
+  filter((vehicles_names == "Cars and Taxis")) %>%
+  plot_ly(x = ~avg_traffic_flow, y = ~vehicles_flow, type = 'scatter',
+               mode = 'markers', symbol = ~region_name, symbols = sample(syms,length(unique(uk_traffic_flow$region_name))),
+          colors = colors,
+               marker = list(size = 10, colors = colors),
+          text = ~paste("Num of vehicles:", vehicles_flow,
+                           '</br></br>', "Miles:", avg_traffic_flow,
+                           '</br></br>',"Year:", year,
+                        '</br></br>',"Region:", region_name),
+             hoverinfo = text,
+               width = 800, height = 550) %>%
+  layout(title = list(text = 'Traffic Flow', 
+                      font = list(size = 18, color = '#434C5E', family = "Arial")),
+         paper_bgcolor = "#d6d8da",
+         plot_bgcolor = "#d6d8da",
+         yaxis = list(title = 'Num of vehicles',
+                 titlefont = list(color='#434C5E', family = "Cambria", size = 18),
+                 tickfont = list(color='#434C5E', family = "Cambria", size = 18)),
+         xaxis = list(title = 'Volume of taffic (miles)',
+                 titlefont = list(color='#434C5E', family = "Cambria", size = 18),
+                 tickfont = list(color='#434C5E', family = "Cambria", size = 18)),
+         legend=l)
+fig
+```
+```{r}
+busiest_hw <- head(uk_vehicles_lad_sum[which((uk_vehicles_lad_sum$year == 2010) & (uk_vehicles_lad_sum$vehicles_names == "All vehicles")),]$local_authority_name, 20)
+busiest_rd <- head(uk_vehicles_rd_sum[which((uk_vehicles_rd_sum$year == 2010) & (uk_vehicles_rd_sum$vehicles_names == "All vehicles")),]$road_name, 20)
+
+busiest_hw_miles <- head(uk_vehicles_lad_summary[which((uk_vehicles_lad_summary$year == 2010) & (uk_vehicles_lad_summary$vehicles_names == "All vehicles")),]$local_authority_name, 20)
+busiest_rd_miles <- head(uk_vehicles_rd_summary[which((uk_vehicles_rd_summary$year == 2010) & (uk_vehicles_rd_summary$vehicles_names == "All vehicles")),]$road_name, 20)
+busiest_rd_miles
+```
+```{r}
+uk_vehicles_rd_sum[which((uk_vehicles_rd_sum$year == 2010) & (uk_vehicles_rd_sum$vehicles_names == "All vehicles")),]
+
+uk_rd_traffic_num <- uk_vehicles_traffic_num %>% 
+  dplyr::select(year, num_of_vehicles,vehicles_names, road_name) %>%
+  dplyr::filter(road_name %in% busiest_rd) %>%
+  dplyr::group_by(year, vehicles_names, road_name) %>% 
+  dplyr::summarize(vehicles_flow = sum(num_of_vehicles, na.rm = TRUE)) %>% 
+  dplyr::arrange((vehicles_names), desc(year), (vehicles_flow))
+
+uk_hw_traffic_num <- uk_vehicles_traffic_num %>% 
+  dplyr::select(year, num_of_vehicles, vehicles_names, local_authority_name) %>%
+  dplyr::filter(local_authority_name %in% busiest_hw) %>%
+  dplyr::group_by(year, vehicles_names, local_authority_name) %>% 
+  dplyr::summarize(vehicles_flow = sum(num_of_vehicles, na.rm = TRUE)) %>% 
+  dplyr::arrange((vehicles_names), desc(year), (vehicles_flow))
+names(uk_vehicles_traffic_num)
+
+uk_rd_traffic_miles <- uk_vehicles_traffic_data %>% 
+  dplyr::select(year, vehicles_miles_driven, vehicles_names, road_name) %>%
+  dplyr::filter(road_name %in% busiest_rd_miles) %>%
+  dplyr::group_by(year, vehicles_names, road_name) %>% 
+  dplyr::summarize(traffic_flow = sum(vehicles_miles_driven, na.rm = TRUE)) %>% 
+  dplyr::arrange((vehicles_names), desc(year), (traffic_flow))
+
+uk_hw_traffic_miles <- uk_vehicles_traffic_data %>% 
+  dplyr::select(year, vehicles_miles_driven, vehicles_names, local_authority_name) %>%
+  dplyr::filter(local_authority_name %in% busiest_hw_miles) %>%
+  dplyr::group_by(year, vehicles_names, local_authority_name) %>% 
+  dplyr::summarize(traffic_flow = sum(vehicles_miles_driven, na.rm = TRUE)) %>% 
+  dplyr::arrange((vehicles_names), desc(year), (traffic_flow))
+
+uk_rd_traffic_num <- rename_vehicles_names(uk_rd_traffic_num)
+uk_hw_traffic_num <- rename_vehicles_names(uk_hw_traffic_num)
+uk_hw_traffic_miles <- recode_vehicles_names(uk_hw_traffic_miles)
+uk_rd_traffic_miles <- recode_vehicles_names(uk_rd_traffic_miles)
+
+uk_rd_traffic_miles
+```
+```{r}
+uk_hw_traffic_miles <- uk_hw_traffic_miles[order( uk_hw_traffic_miles$year,
+                                                  uk_hw_traffic_miles$traffic_flow,
+                                                  uk_hw_traffic_miles$local_authority_name,
+                                                 uk_hw_traffic_miles$vehicles_names
+                                                 ),]
+uk_hw_traffic_miles
+fig <- uk_hw_traffic_miles %>%
+  filter(vehicles_names == "Cars and Taxis") %>%
+  ungroup() %>% plot_ly(x =~traffic_flow, y =~local_authority_name,
+               orientation = 'h',
+             width=900, height = 650, type = 'bar',
+             marker = list(color = colorRampPalette(brewer.pal(9,"YlGnBu"))(20)),
+             text = ~paste("Highway Authority:", local_authority_name,
+                           '</br></br>', "Miles:", traffic_flow,
+                           '</br></br>',"Year:", year),
+             hoverinfo = text,
+             frame = ~year,
+             showlegend = FALSE) %>%
+  layout(title = "<b> Miles covered by Busiest Highways in UK </br>",
+         titlefont = list(size = 18, color = "#434C5E", family = "Cambria"),
+         margin = list(b = 90, t=90, l=180, r=180),
+         plot_bgcolor  = "#d6d8da",
+         paper_bgcolor = "#d6d8da",
+         yaxis = list(title = "",
+                 titlefont = list(color='#434C5E', family = "Cambria", size = 16),
+                 tickfont = list(color='#434C5E', family = "Cambria", size = 16),
+                 categoryorder = "array", categoryarray = ~local_authority_name),
+         xaxis = list(title = "<b> Volume of traffic (miles) </br>",
+                 titlefont = list(color='#434C5E', family = "Cambria", size = 16),
+                 tickfont = list(color='#434C5E', family = "Cambria", size = 16),
+                 tickangle = 45),
+         showlegend = FALSE) %>%
+  animation_slider( currentvalue = list(prefix = "Year: ", 
+                                        font = list(color='#434C5E', family = "Cambria", size = 16))
+  ) %>%
+
+  animation_opts(
+
+    850, easing = "elastic", redraw = FALSE
+
+  )
+fig
+```
+```{r}
+uk_vehicles_hw <- uk_hw_traffic_miles %>% 
+  inner_join(uk_hw_traffic_num, by=c("year","vehicles_names", "local_authority_name"))
+
+colors <- c('#962c39', '#a26e53', '#a1c078', 'darkslategrey', 'darkslateblue', '#7803d5',
+            "#6b3969", "#c4446b", "#b77168", "#123429", "#2c8160", "#462c1e", "#e15497", "#083b5f", "#9f9e15")
+
+fig <- uk_vehicles_hw %>% 
+  filter((vehicles_names == "Cars and Taxis")) %>%
+  plot_ly(x = ~traffic_flow, y = ~vehicles_flow, type = 'scatter',
+               mode = 'markers', symbol = ~local_authority_name, symbols = sample(syms,length(unique(uk_vehicles_hw$local_authority_name))),
+               marker = list(size = 10),
+          text = ~paste("Num of vehicles:", vehicles_flow,
+                           '</br></br>', "Miles:", traffic_flow,
+                           '</br></br>',"Year:", year,
+                        '</br></br>',"Highway Authority:", local_authority_name),
+             hoverinfo = text, frame = ~year,
+               width = 900, height = 650) %>%
+  layout(title = list(text = '<b> Busiest Highways Traffic Flow </b>', 
+                      font = list(size = 18, color = '#434C5E', family = "Arial")),
+         paper_bgcolor = "#d6d8da",
+         plot_bgcolor = "#d6d8da",
+         yaxis = list(title = 'Num of vehicles',
+                 titlefont = list(color='#434C5E', family = "Cambria", size = 16),
+                 tickfont = list(color='#434C5E', family = "Cambria", size = 16)),
+         xaxis = list(title = 'Volume of taffic (miles)',
+                 titlefont = list(color='#434C5E', family = "Cambria", size = 16),
+                 tickfont = list(color='#434C5E', family = "Cambria", size = 16)),
+         legend=l) %>%
+  animation_slider( currentvalue = list(prefix = "Year: ", 
+                                        font = list(color='#434C5E', family = "Cambria", size = 16))
+  ) %>%
+
+  animation_opts(
+
+    900, easing = "elastic", redraw = FALSE
+
+  )
+#margin = list(b = 80, t=80, l=180, r=180),
+fig
+```
+
+
+```{r}
+#uk_car_miles <- uk_rd_traffic_miles[which((uk_rd_traffic_miles$vehicles_names == "Cars and Taxis")),]
+
+#uk_car_miles <- uk_car_miles %>%
+  #arrange(desc(year), (traffic_flow))
+
+names(uk_rd_traffic_miles)
+
+uk_rd_traffic_miles <- uk_rd_traffic_miles[order(uk_rd_traffic_miles$year,
+                                                 uk_rd_traffic_miles$vehicles_names,
+                                                 uk_rd_traffic_miles$traffic_flow
+                                                 ),]
+uk_rd_traffic_miles
+#uk_car_miles
+##filter(vehicles_names == "Cars and Taxis") %>%
+fig <- uk_rd_traffic_miles %>%
+  ungroup() %>% 
+   filter(vehicles_names == "Cars and Taxis") %>%
+  plot_ly(x =~traffic_flow, y =~road_name,
+               orientation = 'h',
+             width=900, height = 650, type = 'bar',
+             marker = list(color = colorRampPalette(brewer.pal(10,"RdPu"))(14)),
+             text = ~paste("Highway Authority:", road_name,
+                           '</br></br>', "Miles:", traffic_flow,
+                           '</br></br>',"Year:", year),
+             hoverinfo = text,
+             frame = ~year,
+             showlegend = FALSE) %>%
+  layout(title = "<b> Miles covered by Major Road Networks in UK </br>",
+         titlefont = list(size = 18, color = "#434C5E", family = "Cambria"),
+         margin = list(b = 90, t=90, l=180, r=180),
+         plot_bgcolor  = "#d6d8da",
+         paper_bgcolor = "#d6d8da",
+         yaxis = list(title = "",
+                 titlefont = list(color='#434C5E', family = "Cambria", size = 16),
+                 tickfont = list(color='#434C5E', family = "Cambria", size = 16),
+                 categoryorder = "array", categoryarray = ~road_name),
+         xaxis = list(title = "<b> Number of Casualties </br>",
+                 titlefont = list(color='#434C5E', family = "Cambria", size = 16),
+                 tickfont = list(color='#434C5E', family = "Cambria", size = 16),
+                 tickangle = 45),
+         showlegend = FALSE) %>%
+  animation_slider( currentvalue = list(prefix = "Year: ", 
+                                        font = list(color='#434C5E', family = "Cambria", size = 16))
+  ) %>%
+
+  animation_opts(
+
+    900, easing = "elastic", redraw = FALSE
+
+  )
+fig
+```
+```{r}
+uk_vehicles_rd <- uk_rd_traffic_miles %>% 
+  inner_join(uk_rd_traffic_num, by=c("year","vehicles_names", "road_name"))
+
+colors <- c('#962c39', '#a26e53', '#a1c078', 'darkslategrey', 'darkslateblue', '#7803d5',
+            "#6b3969", "#c4446b", "#b77168", "#123429", "#2c8160", "#462c1e", "#e15497", "#083b5f", "#9f9e15")
+fig <- uk_vehicles_rd %>% 
+  filter((vehicles_names == "Cars and Taxis")) %>%
+  plot_ly(x = ~traffic_flow, y = ~vehicles_flow, type = 'scatter',
+               mode = 'lines+markers', symbol = ~road_name, symbols = sample(syms,length(unique(uk_vehicles_rd$road_name))),
+          color = ~road_name, colors=colors,
+               marker = list(size =12, colors = colors),
+          text = ~paste("Num of vehicles:", vehicles_flow,
+                           '</br></br>', "Miles:", traffic_flow,
+                           '</br></br>',"Year:", year,
+                        '</br></br>',"Major Road:", road_name),
+             hoverinfo = text, frame = ~year,
+               width = 1000, height = 650) %>%
+  layout(title = list(text = '<b> Traffic Flow of Major Road Networks in UK </b>', 
+                      font = list(size = 18, color = '#434C5E', family = "Arial")),
+         margin = list(b = 80, t=80, l=180, r=180),
+         paper_bgcolor = "#d6d8da",
+         plot_bgcolor = "#d6d8da",
+         yaxis = list(title = 'Num of vehicles',
+                 titlefont = list(color='#434C5E', family = "Cambria", size = 16),
+                 tickfont = list(color='#434C5E', family = "Cambria", size = 16)),
+         xaxis = list(title = 'Volume of taffic (miles)',
+                 titlefont = list(color='#434C5E', family = "Cambria", size = 16),
+                 tickfont = list(color='#434C5E', family = "Cambria", size = 16)),
+         legend=l) %>%
+  animation_slider( currentvalue = list(prefix = "Year: ", 
+                                        font = list(color='#434C5E', family = "Cambria", size = 16))
+  ) %>%
+
+  animation_opts(
+
+    1000, easing = "elastic", redraw = FALSE
+
+  )
+fig
+```
+
+```{r}
+uk_vehicles_traffic_data
+uk_rd_cat_summary <- uk_vehicles_traffic_data %>% 
+  dplyr::group_by(year, vehicles_names, road_category) %>% 
+  dplyr::summarise(avg_traffic_flow = sum(vehicles_miles_driven)) %>% 
+  dplyr::arrange(desc(year), desc(avg_traffic_flow))
+
+uk_rd_cat_summary <- recode_vehicles_names(uk_rd_cat_summary)
+unique(uk_rd_cat_summary$road_category)
+```
+```{r}
+uk_rd_cat_summary
+l <- list(
+  font = list(
+    family = "Arial",
+    size = 16,
+    color = '#4364C5E'),
+  bgcolor = "#d6d8da")
+colors <- c("#d4adea", "#701637", "#dda252", "#01848a", "#b94460", "#292f48", "#8da280", "#c04456")
+
+uk_rd_cat_summary %>% 
+  filter(vehicles_names == "All Heavy Goods Vehicles") %>%
+  ungroup() %>%
+  plot_ly(labels = ~road_category, values = ~avg_traffic_flow,
+        marker = list(colors = colors,
+                      line = list(color = '#FFFFFF', width = 0.5)),
+        frame = ~year,
+        textinfo = 'percent',
+        insidetextfont = list(color = '#FFFFFF', size = 14),
+        outsidetextfont = list(color = '#FFFFFF', size = 14),
+        width=1000, height=650) %>% 
+  add_pie(hole = 0.6) %>% 
+  layout(title = "Percent of Miles covered by different Road Categories in UK",  
+         titlefont = list(size = 18, color = '#434C5E', family = "Arial"),
+         showlegend = T,
+         xaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE, color='#434C5E'),
+         yaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE, color='#434C5E'),
+         plot_bgcolor  = "#d6d8da",
+         paper_bgcolor = "#d6d8da",
+         legend = l,
+          margin = list(b = 80, t=80, l=180, r=180)) %>%
+  animation_slider( currentvalue = list(prefix = "Year: ", 
+                                        font = list(color='#434C5E', family = "Cambria", size = 16))
+  ) %>% 
+  animation_opts(1000, easing = "elastic", redraw = FALSE)
+```
+
+```{r}
+colors <- c("#701637", "#d4adea", "#8da280", "#c04456")
+cat_syms <- c('square-open', 'square-dot', 'diamond','cross')
+fig <- uk_rd_cat_summary %>% 
+  filter(vehicles_names == "All Heavy Goods Vehicles") %>%
+  ungroup() %>%
+  plot_ly(x = ~year, y = ~avg_traffic_flow, type = 'scatter',
+               mode = 'lines+markers', symbol = ~road_category, symbols =cat_syms,
+          color = ~road_category, colors = colors,
+               marker = list(size = 10),
+               width = 900, height = 650) %>%
+  layout(title = list(text = 'Traffic Flow', font = t), 
+         paper_bgcolor = "#d6d8da",
+         plot_bgcolor = "#d6d8da",
+         margin = list(b = 90, t=90, l=180, r=180),
+         yaxis = list(title = '<b> Volume of traffic (miles) </b>',
+                 titlefont = list(color='#434C5E', family = "Cambria", size = 16),
+                 tickfont = list(color='#434C5E', family = "Cambria", size = 16)),
+         xaxis = list(title = 'Years',
+                 titlefont = list(color='#434C5E', family = "Cambria", size = 16),
+                 tickfont = list(color='#434C5E', family = "Cambria", size = 16)),
+         legend = l)
+fig
+```
+```{r}
+uk_vehicles_region_summary[which((uk_vehicles_region_summary$year == 2000) & (uk_vehicles_region_summary$region_name == "London") & (uk_vehicles_region_summary$vehicles_names == "Buses and Coaches")),]$avg_traffic_flow
+
+unique(uk_vehicles_region_summary$region_name)
+names(uk_vehicles_region_summary)
+```
+
+```{r}
+write.csv(uk_vehicles_region_summary, file = "uk-data/uk_vehicles_region_summary.csv", row.names = FALSE)
+write.csv(uk_vehicles_region, file = "uk-data/uk_vehicles_region.csv", row.names = FALSE)
+write.csv(uk_hw_traffic_miles, file = "uk-data/uk_hw_traffic_miles.csv", row.names = FALSE)
+write.csv(uk_rd_traffic_miles, file = "uk-data/uk_rd_traffic_miles.csv", row.names = FALSE)#uk_rd_cat_summary
+write.csv(uk_rd_cat_summary, file = "uk-data/uk_rd_cat_summary.csv", row.names = FALSE)
+```
+
+
+```{r}
+##subset(uk_vehicles_summary, vehicles_names == "Buses and Coaches" &
+                 ##region_name == "East of England")
+plot_ly(uk_vehicles_region_summary, x = ~year, y = ~avg_traffic_flow, 
+        color = ~region_name, 
+        marker = list(colorscale = "brown"),
+        width=800, height = 600) %>%
+  add_bars() %>%
+  layout(barmode = "stack")
+```
+
+```{r}
+names(uk_traffic_data)
+uk_spatial_data <- uk_traffic_data[, c("latitude", "longitude", "northing", "easting", "year", "region_name", "all_vehicles_miles_driven")]
+
+# define center of map
+lat_center <- as.numeric(mean(uk_traffic_data[which((uk_traffic_data$year == 2006) & (uk_traffic_data$region_name == "London")),]$latitude))
+long_center <- as.numeric(mean(uk_traffic_data[which((uk_traffic_data$year == 2006) & (uk_traffic_data$region_name == "London")),]$longitude)) 
+head(uk_traffic_data)
+viz_map <- uk_traffic_data %>%
+  dplyr::filter(year == 2006 & region_name == "London") %>%
+  leaflet() %>% 
+  addTiles() %>% 
+  addProviderTiles(providers$Stamen.TonerLite,
+        options = providerTileOptions(noWrap = TRUE)
+      ) %>% 
+  setView(long_center,lat_center, zoom = 10) %>%
+  addHeatmap(lng=~longitude,lat=~latitude,intensity=~all_vehicles_miles_driven,max=100,radius=5,blur=5) %>%
+  addResetMapButton()
+
+viz_map
+unique(uk_traffic_data$region_name)
+```
+
+```{r}
+#install.packages("leaflet")
+#install.packages("rgdal")
+library(leaflet)
+library("rgdal")
+```
+```{r}
+uk_json <- rgdal::readOGR("uk_shape_file/map.topojson")
+uk_json_lad <- rgdal::readOGR("uk_shape_file/uk_lad.topojson")
+uk_geojson_lad <- rgdal::readOGR("uk_shape_file/uk_la.geojson")
+names(uk_json_lad)
+head(uk_geojson_lad, 20)
+names(uk_json)[names(uk_json) == "EER13NM"] <- "region_name"
+unique(uk_json$region_name)
+unique(uk_vehicles_region_summary$region_name)
+##rename region in json df--the order needs to be the same
+json_regions_names = c("Eastern")
+region_names = c("East of England")
+#merge
+uk_json$region_name <- mapvalues(uk_json$region_name, from=json_regions_names, to=region_names)
+#foo$EER13NM <- replace(uk_json$EER13NM, uk_json$EER13NM == "North East", "North East, England")
+uk_json_map <- merge(uk_json, uk_vehicles_region_summary, by = "region_name", duplicateGeoms = T) #all.y=T
+head(uk_json_map, 100)
+names(uk_json_map)
+
+sel_yr_veh <- uk_json_map[which((uk_json_map$year == 2018) & (uk_json_map$vehicles_names == "All vehicles")),]
+lat_center <- as.numeric(mean(uk_traffic_data[which((uk_traffic_data$year == 2018)),]$latitude))
+long_center <- as.numeric(mean(uk_traffic_data[which((uk_traffic_data$year == 2018)),]$longitude))
+
+pal <- colorNumeric("plasma", sel_yr_veh$avg_traffic_flow)
+
+#pal <- colorNumeric("YlOrRd", uk_json_map[which((uk_json_map$Year == 2014)),]$num_of_casualties)
+leaflet(sel_yr_veh) %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  setView(-1.9,54.5, zoom = 5) %>%
+  addPolygons(stroke = FALSE, smoothFactor = 0.3, fillOpacity = 0.8,
+    fillColor = ~pal(avg_traffic_flow),
+    label = ~paste0(region_name, ": ", formatC(avg_traffic_flow, big.mark = ",")),
+    labelOptions = labelOptions(style = list(
+                                  "color" = "black",
+                                  "font-family" = "Cambria",
+                                  "font-style" = "italic",
+                                  "box-shadow" = "3px 3px rgba(0,0,0,0.25)",
+                                  "font-size" = "15px",
+                                  "border-color" = "rgba(0,0,0,0.5)"
+                                  ), direction = "auto")) %>%
+  addLegend(data = sel_yr_veh, pal = pal, values = ~avg_traffic_flow, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)), 
+    title = ~paste0("#Miles (", unique(year), " - ", unique(vehicles_names), ")")) %>%
+  addResetMapButton()
+#addProviderTiles("CartoDB.Positron")
+```
+```{r}
+uk_traffic_long_lat <- uk_traffic_data %>% 
+  dplyr::group_by(year, region_name) %>% 
+  dplyr::summarise(latitude = mean(latitude), longitude = mean(longitude)) %>% 
+  dplyr::arrange(desc(year))
+uk_traffic_long_lat
+```
+
+```{r}
+
+topojson_write()
+#st_write(uk_json_map, file = "shinApp/uk_json_map.topojson")
+#writeOGR(uk_json_map, dsn="shinApp/uk_json_map.topojson", layer="uk_json", driver="GeoJSON")
+##uk_tst_map <- rgdal::readOGR("shinApp/uk_json_map.topojson")
+write.csv(uk_vehicles_region_summary, file = "uk-data/uk_vehicles_region_summary.csv", row.names = FALSE)
+write.csv(uk_vehicles_lad_summary, file = "uk-data/uk_vehicles_lad_summary.csv", row.names = FALSE)
+write.csv(uk_vehicles_rd_summary, file = "uk-data/uk_vehicles_rd_summary.csv", row.names = FALSE)
+write.csv(uk_traffic_long_lat, file = "uk-data/uk_traffic_long_lat.csv", row.names = FALSE)
+##uk_tst_map <- read.csv("shinApp/uk_json_map.csv",
+                            ##header = T, sep = ",")
+unique(uk_vehicles_region_summary$region_name)
+names(uk_vehicles_lad_summary)
+```
+
+```{r}
+##tmap
+##uk shape files
+uk_lad_shp <- st_read("uk_shape_file/Counties_and_Unitary_Authorities_(April_2019)_Boundaries_UK_BFE.shp")
+uk_shp <- st_read("uk_shape_file/NUTS_Level_1_(January_2018)_Boundaries.shp")
+names(uk_lad_shp)[names(uk_lad_shp) == "ctyua19cd"] <- "local_authority_code"
+names(uk_lad_shp)[names(uk_lad_shp) == "ctyua19nm"] <- "local_authority_name"
+names(uk_shp)[names(uk_shp) == "nuts118nm"] <- "region_name"
+shp_regions_names = c("North East (England)","North West (England)","Yorkshire and The Humber","East Midlands (England)","West Midlands (England)", "East of England","London","South East (England)","South West (England)",
+                      "Wales", "Scotland")
+region_names = c("North East","North West","Yorkshire and The Humber","East Midlands","West Midlands","East of England","London","South East","South West", "Wales","Scotland")
+uk_shp$region_name <- mapvalues(uk_shp$region_name, from=shp_regions_names, to=region_names)
+uk_shp_map <- merge(uk_shp, uk_vehicles_region_summary, by = "region_name", duplicateGeoms = T) #all.y=T
+uk_lad_shp_map <- merge(uk_lad_shp, uk_vehicles_lad_summary, by = "local_authority_code", duplicateGeoms = T) #all.y=T
+```
+```{r}
+uk_shp_map_all_vehs <- uk_shp_map[which((uk_shp_map$vehicles_names == "All vehicles")),]
+uk_lad_shp_map_all_vehs <- uk_lad_shp_map[which((uk_lad_shp_map$vehicles_names == "All vehicles")),]
+```
+```{r}
+uk_traffic_region_animation <- tm_shape(uk_shp_map_all_vehs) +
+  tm_polygons(col = "avg_traffic_flow", palette = "YlOrBr", n = 8,
+              title = "# Miles Covered") +
+tm_facets(along = "year") + tm_style("cobalt") + tm_layout(
+    legend.position = c("right", "top"), legend.text.size = 1.2, 
+    legend.title.size = 1.7, main.title.size = 2.0,
+    legend.height = 0.3)
+tmap_animation(
+  uk_traffic_region_animation,filename = "uk_shape_file/uk_reg_traffic_animation2.gif",
+  delay = 75, width = 850, height = 1000
+  )
+
+uk_traffic_region_animation <- tm_shape(uk_shp_map_all_vehs) +
+  tm_polygons(col = "avg_traffic_flow", palette = "YlOrBr", n = 8,
+              title = "# Miles Covered") +
+tm_facets(along = "year", free.coords = FALSE) + tmap_options(bg.color = "#d6d8da") + tm_layout(
+    legend.position = c("right", "top"), legend.text.size = 1.0, 
+    legend.title.size = 1.5, main.title.size = 2.0,
+    legend.height = 0.3, bg.color = "#d6d8da")
+tmap_animation(
+  uk_traffic_region_animation,
+  delay = 75, width = 800, height = 1000
+  )
+```
+```{r}
+uk_traffic_lad_animation <- tm_shape(uk_lad_shp_map_all_vehs) +
+  tm_polygons(col = "avg_traffic_flow", palette =colorRampPalette(brewer.pal(10,"RdPu"))(8), n = 8,
+              title = "# Miles Covered") +
+tm_facets(along = "year") + tm_style("cobalt") + tm_layout(
+    legend.text.size = 1.2, legend.position = c("right", "top"),
+    legend.title.size = 1.7, main.title.size = 2.0,
+    legend.height = 0.3)
+tmap_animation(
+  uk_traffic_lad_animation, filename = "uk_shape_file/uk_traffic_lad_animation2.gif",
+  delay = 75, width = 850, height = 1000
+  )
+
+uk_traffic_lad_animation <- tm_shape(uk_lad_shp_map_all_vehs) +
+  tm_polygons(col = "avg_traffic_flow", palette =colorRampPalette(brewer.pal(10,"RdPu"))(8), n = 8,
+              title = "# Miles Covered") +
+tm_facets(along = "year") + tmap_options(bg.color = "#d6d8da") + tm_layout(
+    legend.text.size = 1.0, legend.position = c("right", "top"),
+    legend.title.size = 1.5, main.title.size = 2.0,
+    legend.height = 0.3)
+tmap_animation(
+  uk_traffic_lad_animation,
+  delay = 50, width = 800, height = 1000
+  )
+```
+
+
+
+```{r}
+`%not_in%` <- purrr::negate(`%in%`)
+containItems <- function(list1, list2, notfdlist){
+  for(lan in list1) {
+    if (lan %not_in% list2)
+      notfdlist <- c(notfdlist, lan)
+  }
+  return(notfdlist)
+}
+lan_lad <- unique(uk_json_lad$LAD13NM)
+#lan_shp_lad <- unique(uk_lad_shp$local_authority_code)
+#length(lan_shp_lad)
+lan_traffic <- unique(uk_traffic_data$local_authority_name)
+lan_not_fd_in_lad <- containItems(lan_traffic, lan_lad, c())
+lan_not_fd_in_traffic <- containItems(lan_lad, lan_traffic, c())
+length(lan_not_fd_in_lad)
+lan_not_fd_in_traffic
+lan_lad
+```
+```{r}
+cam_json_names <- c("East Cambridgeshire", "South Cambridgeshire", "Fenland", "Cambridge", "Huntingdonshire")
+cum_json_names <- c("Carlisle", "South Lakeland", "Allerdale", "Copeland", "Barrow-in-Furness", "Eden")
+derb_json_names <- c("Chesterfield", "High Peak", "Amber Valley", "Derbyshire Dales", "North East Derbyshire", 
+                    "Bolsover", "Erewash", "South Derbyshire")
+dev_json_names <- c("East Devon", "North Devon", "Exeter", "Torridge", "South Hams", "West Devon", "North Dorset",
+                   "Mid Devon", "Teignbridge")
+dor_json_names <- c("East Dorset", "West Dorset")
+estsuss_json_names <- c("Hastings", "Lewes", "Wealden", "Eastbourne", "Rother")
+ess_json_names <- c("Brentwood", "Colchester", "Maldon", "Basildon", "Uttlesford", "Castle Point", "Epping Forest",
+                   "Rochford", "Braintree", "Chelmsford", "Harlow", "Tendring")
+glou_json_names <- c("Forest of Dean", "Cheltenham", "Tewkesbury", "Gloucester", "Cotswold", "Stroud")
+hamp_json_names <- c("Eastleigh", "Hart", "Basingstoke and Deane", "Rushmoor", "Fareham", 
+                    "Havant", "Test Valley", "East Hampshire", "Gosport", "New Forest", "Winchester")
+kent_json_names <- c("Ashford", "Dover", "Sevenoaks", "Canterbury", "Thanet", "Gravesham", "Tonbridge and Malling",
+                    "Dartford", "Maidstone", "Swale", "Tunbridge Wells")
+lanch_json_names <- c("Burnley", "Hyndburn", "Preston", "South Ribble", "Chorley", "Lancaster", "Ribble Valley",
+                     "West Lancashire", "Fylde", "Pendle", "Rossendale", "Wyre")
+leich_json_names <- c("Blaby", "Hinckley and Bosworth", "Charnwood", "Oadby and Wigston", "Melton",
+                     "Harborough", "North West Leicestershire")
+linc_json_names <- c("Lincoln", "South Kesteven", "Boston", "North Kesteven", "West Lindsey", "East Lindsey", 
+                    "South Holland")
+nor_json_names <- c("Broadland", "North Norfolk", "Great Yarmouth", "Norwich", "Breckland", "King's Lynn and West Norfolk", "South Norfolk")
+north_json_names <- c("Corby", "Kettering", "Wellingborough", "Daventry", "Northampton", "East Northamptonshire", 
+                     "South Northamptonshire")
+nyork_json_names <- c("Harrogate", "Scarborough", "Craven", "Richmondshire", "Selby", "Hambleton", "Ryedale")
+nott_json_names <- c("Bassetlaw", "Mansfield", "Broxtowe", "Newark and Sherwood", "Ashfield", "Gedling", 
+                    "Rushcliffe")
+ofd_json_names <- c("Cherwell", "Vale of White Horse", "Oxford", "West Oxfordshire", "South Oxfordshire")
+som_json_names <- c("Sedgemoor", "West Somerset", "South Somerset", "Mendip", "Taunton Deane")
+staff_json_names <- c("Lichfield", "Stafford", "Cannock Chase", "Newcastle-under-Lyme", "Staffordshire Moorlands",
+                     "East Staffordshire", "South Staffordshire", "Tamworth")
+suf_json_names <- c("Babergh", "Mid Suffolk", "Ipswich", "Suffolk Coastal")
+surr_json_names <- c("Waveney", "Guildford", "Runnymede", "Tandridge", "Elmbridge", "Mole Valley", "Spelthorne",
+                    "Waverley", "Epsom and Ewell", "Reigate and Banstead", "Surrey Heath", "Woking")
+warw_json_names <- c("North Warwickshire", "Stratford-on-Avon", "Nuneaton and Bedworth", "Warwick", "Rugby")
+wstsuss_json_names <- c("Arun", "Horsham", "Chichester", "Mid Sussex", "Adur", "Crawley", "Worthing")
+wors_json_names <- c("Bromsgrove", "Worcester", "Malvern Hills", "Wychavon", "Redditch", "Wyre Forest")
+hert_json_names <- c("St Albans", "Stevenage", "Welwyn Hatfield", "East Hertfordshire", "Three Rivers",
+                     "North Hertfordshire", "Watford", "Broxbourne", "Dacorum", "Hertsmere")
+pert_json_names <- c("Perth and Kinross")
+rh_json_names <- c("Rhondda Cynon Taf")
+chseast_json_names <- c("Cheshire East")
+dumm_json_names <- c("Dumfries and Galloway")
+arg_json_names <- c("Argyll and Bute")
+chswst_json_names <- c("Cheshire West and Chester")
+chs_json_names <- c("Christchurch")
+vale_json_names <- c("Vale of Glamorgan")
+dur_json_names <- c("County Durham")
+corn_json_names <- c("Cornwall")
+
+#merge
+lad_list <- list(cam_json_names, cum_json_names, derb_json_names, dev_json_names, dor_json_names, estsuss_json_names, 
+              ess_json_names, glou_json_names, hamp_json_names, kent_json_names, lanch_json_names,
+              leich_json_names, linc_json_names, nor_json_names, north_json_names, nyork_json_names, nott_json_names,
+              ofd_json_names, som_json_names, staff_json_names, suf_json_names, surr_json_names, warw_json_names, 
+              wstsuss_json_names, wors_json_names, hert_json_names, pert_json_names, rh_json_names,
+              chseast_json_names, dumm_json_names, arg_json_names, chswst_json_names, chs_json_names, vale_json_names,
+              dur_json_names, corn_json_names)
+lad_names <- c("Cambridgeshire", "Cumbria", "Derbyshire", "Devon", "Dorset", "East Sussex", "Essex", "Gloucestershire", "Hampshire", "Kent", "Lancashire", "Leicestershire", "Lincolnshire",
+               "Norfolk", "Northamptonshire", "North Yorkshire", "Nottinghamshire", "Oxfordshire", "Somerset",
+               "Staffordshire", "Suffolk", "Surrey", "Warwickshire", "West Sussex", "Worcestershire", "Hertfordshire",
+               "Perth & Kinross", "Rhondda, Cynon, Taff", "East Cheshire", "Dumfries & Galloway", "Argyll & Bute",
+               "West Cheshire", "Bournemouth", "The Vale of Glamorgan", "Durham", "Cornwall excluding Isles of Scilly")
+
+##
+uk_json_lad[uk_json_lad$LAD13NM %in% cam_json_names,"LAD13NM"] <- "Cambridgeshire"
+uk_json_lad[uk_json_lad$LAD13NM %in% cum_json_names,"LAD13NM"] <- "Cumbria"
+uk_json_lad[uk_json_lad$LAD13NM %in% derb_json_names,"LAD13NM"] <- "Derbyshire"
+uk_json_lad[uk_json_lad$LAD13NM %in% dev_json_names,"LAD13NM"] <- "Devon"
+uk_json_lad[uk_json_lad$LAD13NM %in% dor_json_names,"LAD13NM"] <- "Dorset"
+uk_json_lad[uk_json_lad$LAD13NM %in% estsuss_json_names,"LAD13NM"] <- "East Sussex"
+uk_json_lad[uk_json_lad$LAD13NM %in% ess_json_names,"LAD13NM"] <- "Essex"
+uk_json_lad[uk_json_lad$LAD13NM %in% glou_json_names,"LAD13NM"] <- "Gloucestershire"
+uk_json_lad[uk_json_lad$LAD13NM %in% hamp_json_names,"LAD13NM"] <- "Hampshire"
+uk_json_lad[uk_json_lad$LAD13NM %in% kent_json_names,"LAD13NM"] <- "Kent"
+uk_json_lad[uk_json_lad$LAD13NM %in% lanch_json_names,"LAD13NM"] <- "Lancashire"
+uk_json_lad[uk_json_lad$LAD13NM %in% leich_json_names,"LAD13NM"] <- "Leicestershire"
+uk_json_lad[uk_json_lad$LAD13NM %in% linc_json_names,"LAD13NM"] <- "Lincolnshire"
+uk_json_lad[uk_json_lad$LAD13NM %in% nor_json_names,"LAD13NM"] <- "Norfolk"
+uk_json_lad[uk_json_lad$LAD13NM %in% north_json_names,"LAD13NM"] <- "Northamptonshire"
+uk_json_lad[uk_json_lad$LAD13NM %in% nyork_json_names,"LAD13NM"] <- "North Yorkshire"
+uk_json_lad[uk_json_lad$LAD13NM %in% nott_json_names,"LAD13NM"] <- "Nottinghamshire"
+uk_json_lad[uk_json_lad$LAD13NM %in% ofd_json_names,"LAD13NM"] <- "Oxfordshire"
+uk_json_lad[uk_json_lad$LAD13NM %in% som_json_names,"LAD13NM"] <- "Somerset"
+uk_json_lad[uk_json_lad$LAD13NM %in% staff_json_names,"LAD13NM"] <- "Staffordshire"
+uk_json_lad[uk_json_lad$LAD13NM %in% suf_json_names,"LAD13NM"] <- "Suffolk"
+uk_json_lad[uk_json_lad$LAD13NM %in% surr_json_names,"LAD13NM"] <- "Surrey"
+uk_json_lad[uk_json_lad$LAD13NM %in% warw_json_names,"LAD13NM"] <- "Warwickshire"
+uk_json_lad[uk_json_lad$LAD13NM %in% wstsuss_json_names,"LAD13NM"] <- "West Sussex"
+uk_json_lad[uk_json_lad$LAD13NM %in% wors_json_names,"LAD13NM"] <- "Worcestershire"
+uk_json_lad[uk_json_lad$LAD13NM %in% hert_json_names,"LAD13NM"] <- "Hertfordshire"
+uk_json_lad[uk_json_lad$LAD13NM %in% pert_json_names,"LAD13NM"] <- "Perth & Kinross"
+uk_json_lad[uk_json_lad$LAD13NM %in% rh_json_names,"LAD13NM"] <- "Rhondda, Cynon, Taff"
+uk_json_lad[uk_json_lad$LAD13NM %in% chseast_json_names,"LAD13NM"] <- "East Cheshire"
+uk_json_lad[uk_json_lad$LAD13NM %in% dumm_json_names,"LAD13NM"] <- "Dumfries & Galloway"
+uk_json_lad[uk_json_lad$LAD13NM %in% arg_json_names,"LAD13NM"] <- "Argyll & Bute"
+uk_json_lad[uk_json_lad$LAD13NM %in% chswst_json_names,"LAD13NM"] <- "West Cheshire"
+uk_json_lad[uk_json_lad$LAD13NM %in% chs_json_names,"LAD13NM"] <- "Bournemouth"
+uk_json_lad[uk_json_lad$LAD13NM %in% vale_json_names,"LAD13NM"] <- "The Vale of Glamorgan"
+uk_json_lad[uk_json_lad$LAD13NM %in% dur_json_names,"LAD13NM"] <- "Durham"
+uk_json_lad[uk_json_lad$LAD13NM %in% corn_json_names,"LAD13NM"] <- "Cornwall excluding Isles of Scilly"
+
+for (i in seq_along(lad_list)) {
+  uk_json_lad[uk_json_lad$LAD13NM %in% unlist(lad_list[i]),"LAD13NM"] <- lad_names[i]
+}
+print(surr_json_names)
+print(unlist(lad_list[33]))
+```
+
+```{r}
+uk_lads <- read.csv("uk_shape_file/UK_LAD21.csv",
+                            header = T, sep = ",")
+
+names(uk_lads)[names(uk_lads) == "ï..LAD21CD"] <- "LAD_Code"
+uk_lads_new <- uk_lads[which(uk_lads$LAD_Code %in% lan_not_fd_in_traffic),]
+#lad_regions_names = c("North East","North West","Yorkshire and The Humber","East Midlands","West Midlands",
+                       #"East of England","South East","South West")
+#region_names = c("North East, England","North West, England","Yorkshire and The Humber, England","East Midlands, #England","West Midlands, England","East, England","South East, England","South West, England")
+
+#uk_lads_new$RGN21NM <- mapvalues(uk_lads_new$RGN21NM, from=lad_regions_names, to=region_names)
+names(uk_lads_new)[names(uk_lads_new) == "RGN21NM"] <- "region_name"
+
+head(uk_vehicles_lad_summary, 5)
+
+uk_lad_bd <- st_read("uk_shape_file/Counties_and_Unitary_Authorities_(December_2016)_Boundaries.shp")
+names(uk_lad_bd)[names(uk_lad_bd) == "ctyua16cd"] <- "local_authority_code"
+names(uk_geojson_lad)[names(uk_geojson_lad) == "geo_code"] <- "local_authority_code"
+```
+
+
+
+```{r}
+uk_lad_shp <- st_read("uk_shape_file/Counties_and_Unitary_Authorities_(April_2019)_Boundaries_UK_BFE.shp")
+names(uk_lad_shp)[names(uk_lad_shp) == "ctyua19cd"] <- "local_authority_code"
+##names(uk_lad_shp)[names(uk_lad_shp) == "ctyua19nm"] <- "local_authority_name"
+names(uk_json_lad)
+names(uk_json_lad)[names(uk_json_lad) == "LAD13NM"] <- "local_authority_name"
+head(uk_lad_shp, 50) ##local_authority_code
+
+head(uk_vehicles_lad_summary, 10)
+#merge
+#uk_lad_shp_map <- merge(uk_lad_shp, uk_vehicles_lad_summary, by = "local_authority_code", duplicateGeoms = T)
+uk_lad_json_map <- merge(uk_json_lad, uk_vehicles_lad_summary, by = "local_authority_name", duplicateGeoms = T)
+#uk_lad_json_map <- merge(uk_geojson_lad, uk_vehicles_lad_summary, by = "local_authority_code", duplicateGeoms = T)
+names(uk_lad_shp)
+#pop = sample(1:1000, length(unique(uk_json_lad$LAD13NM)), replace=TRUE)
+#uk_json_lad$pop = pop
+head(uk_lad_json_map, 10)
+unique(uk_lad_shp_map$vehicles_names)
+
+###lad nmap
+lad_map_table <- uk_lad_json_map[which((uk_lad_json_map$year == 2018) & (uk_lad_json_map$vehicles_names == "Cars and Taxis")),]
+pal <- colorNumeric("plasma", lad_map_table$avg_traffic_flow)#"RdBu"
+leaflet(lad_map_table) %>%
+  addTiles() %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  addPolygons(stroke = FALSE, smoothFactor = 0.3, fillOpacity = 1,
+    fillColor = ~pal(avg_traffic_flow),
+    label = ~paste0(local_authority_name,"(",region_name,")", ": ", formatC(avg_traffic_flow, big.mark = ",")),
+    labelOptions = labelOptions(style = list(
+                                  "color" = "black",
+                                  "font-family" = "Cambria",
+                                  "font-style" = "italic",
+                                  "box-shadow" = "3px 3px rgba(0,0,0,0.25)",
+                                  "font-size" = "14px",
+                                  "border-color" = "rgba(0,0,0,0.5)"
+                                  ), direction = "auto")) %>%
+  addLegend(pal = pal, values = ~avg_traffic_flow, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)),
+    title = ~paste0("#Miles Travelled (", (unique(lad_map_table$year)), ")")) %>%
+  addResetMapButton()
+```
+```{r}
+# define center of map
+lat_center <- uk_traffic_long_lat[which((uk_traffic_long_lat$year == 2005) & (uk_traffic_long_lat$region_name == "London")),]$latitude
+long_center <- uk_traffic_long_lat[which((uk_traffic_long_lat$year == 2005) & (uk_traffic_long_lat$region_name == "London")),]$longitude
+
+names(uk_lad_json_map)
+###lad nmap
+lad_reg_map_table <- uk_lad_json_map[which((uk_lad_json_map$year == 2005) & (uk_lad_json_map$vehicles_names == "Cars and Taxis") & (uk_lad_json_map$region_name == "London")),]
+unique(uk_lad_json_map$vehicles_names)
+pal <- colorNumeric("plasma", lad_reg_map_table$avg_traffic_flow)
+region_lad_map <- leaflet(lad_reg_map_table) %>%
+  addTiles() %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  setView(long_center,lat_center, zoom = 10) %>%
+  addPolygons(stroke = FALSE, smoothFactor = 0.3, fillOpacity = 0.7,
+    fillColor = ~pal(avg_traffic_flow),
+    label = ~paste0(local_authority_name,"(",region_name,")", ": ", formatC(avg_traffic_flow, big.mark = ",")),
+    labelOptions = labelOptions(style = list(
+                                  "color" = "black",
+                                  "font-family" = "Cambria",
+                                  "font-style" = "italic",
+                                  "box-shadow" = "3px 3px rgba(0,0,0,0.25)",
+                                  "font-size" = "14px",
+                                  "border-color" = "rgba(0,0,0,0.5)"
+                                  ), direction = "auto")) %>%
+  addLegend(pal = pal, values = ~avg_traffic_flow, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)),
+    title = ~paste0("#Miles Travelled (", (unique(lad_reg_map_table$year)), ")")) %>%
+  addResetMapButton()
+
+region_lad_map
+# Clear environment
+# rm(list = ls())
+
+
+length(lan_not_fd_in_lad)
+lan_not_fd_in_lad
+```
+
+```{r}
+#install.packages("tmap")
+#install_github("r-tmap/tmaptools")
+#install_github("r-tmap/tmap")
+library(tmap)
+library("sf")
+uk_shape_file <- rgdal::readOGR("uk_shape_file/2018-MRDB-minimal.shp",
+  layer = "2018-MRDB-minimal")
+
+names(uk_shape_file)
+PRO <- sp::CRS('+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0')
+uk_shape_file <- spTransform(uk_shape_file, PRO)
+shp_rd_num <- unique(uk_shape_file$RoadNumber)
+rd_name <- unique(uk_vehicles_rd_summary$road_name)
+rd_not_in_data <- containItems(shp_rd_num, rd_name, c())
+rd_not_in_shp <- containItems(rd_name, shp_rd_num, c())
+length(rd_not_in_shp)
+names(uk_shape_file)[names(uk_shape_file) == "RoadNumber"] <- "road_name"
+head(uk_shape_file, 1000)
+uk_road_shp_map <- merge(uk_shape_file, uk_vehicles_rd_summary, by = "road_name", duplicateGeoms = T)
+st_write(uk_road_shp_map, "uk_shape_file/uk_road_shp_map.shp")
+writeOGR(uk_road_shp_map, dsn = "uk_shape_file/uk_road_shp_map.shp", layer = 'poly', driver = "ESRI Shapefile")
+uk_road_shp <- st_read("uk_shape_file/uk_road_shp_map.shp")
+head(uk_road_shp_map)
+shp_df <- as.data.frame(uk_shape_file)
+rd_shp_map <- SpatialLinesDataFrame(uk_shape_file, data = uk_road_shp_map, match.ID = FALSE)
+
+leaflet(data = uk_shape_file) %>% 
+  addTiles() %>% 
+  addPolylines(stroke = TRUE, weight = 0.6, color = "crimson",
+               fillOpacity = 1.5, smoothFactor = 0.5) %>%
+  addProviderTiles("CartoDB.Positron")
+#plot(uk_shape_file)
+head(uk_road_shp_map,100)
+
+#parameters in addpolylines
+#stroke,color,weight,opacity,lineCap,lineJoin
+#dashArray,dashOffset,fill,fillColor,fillOpacity
+#fillRule,bubblingMouseEvents,renderer,className
+```
+
+
+```{r}
+# define center of map
+lat_center <- as.numeric(mean(uk_traffic_data[which((uk_traffic_data$year == 2005) & (uk_traffic_data$region_name == "London")),]$latitude))
+long_center <- as.numeric(mean(uk_traffic_data[which((uk_traffic_data$year == 2005) & (uk_traffic_data$region_name == "London")),]$longitude)) 
+###road nmap
+road_map_table <- uk_road_shp_map[which((uk_road_shp_map$year == 2005) & (uk_road_shp_map$vehicles_names == "Cars and Taxis") & (uk_road_shp_map$region_name == "London")),]
+unique(uk_traffic_data$region_name)
+head(road_map_table, 50)
+names(road_map_table)
+##road_map_table[, c("CP_Number", "road_name")]
+##SpatialLinesDataFrame(road_map_table[, c("CP_Number", "road_name")], data = road_map_table)
+pal <- colorNumeric("RdBu", NULL)
+avg_traffic_flow <- road_map_table$avg_traffic_flow
+region_shape_map <- leaflet(data = road_map_table) %>% 
+  addTiles() %>% 
+  addPolylines(stroke = TRUE, weight = 4.0, color = pal(avg_traffic_flow),
+               fillColor = pal(avg_traffic_flow),
+               fillOpacity = 1.5, smoothFactor = 0.5,
+               label = ~paste0(road_name,"(",region_name,")", ": ", formatC(avg_traffic_flow, big.mark = ",")),
+    labelOptions = labelOptions(style = list(
+                                  "color" = "black",
+                                  "font-family" = "Cambria",
+                                  "font-style" = "italic",
+                                  "box-shadow" = "3px 3px rgba(0,0,0,0.25)",
+                                  "font-size" = "14px",
+                                  "border-color" = "rgba(0,0,0,0.5)"
+                                  ), direction = "auto")) %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  setView(long_center,lat_center, zoom = 10) %>%
+  addLegend(pal = pal, values = ~avg_traffic_flow, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x))) %>%
+  addResetMapButton()
+
+region_shape_map
+```
+
+```{r out.width = '100%'}
+##sync two maps
+sync(region_lad_map, region_shape_map,
+     sync = "all", no.initial.sync = FALSE)
+```
+```{r}
+library(mapview)
+latticeview(region_lad_map, region_shape_map)
+```
+```{r}
+#leaflet() %>%
+  #addTiles(group = "OpenStreetMap") %>%
+  #addCircleMarkers(runif(20, -75, -74), runif(20, 41, 42), group = "Markers1", color ="red") %>%
+  #addMarkers(runif(20, -75, -74), runif(20, 41, 42), group = "Markers2") %>%
+  #addLegend(values = 1, group = "Markers1", position = "bottomleft", labels = "1", colors= "red") %>%
+  #addLegend(values = 2, group = "Markers2", position = "bottomleft", labels = "2" ,colors= "blue") %>%  
+  #addLayersControl(overlayGroups = c("Markers1", "Markers2"),
+                   #options = layersControlOptions(collapsed = FALSE)) %>% 
+  #hideGroup(c("Markers1", "Markers2"))
+```
+
+
+```{r}
+data(NLD_prov)
+
+st_read("uk_shape_file/2018-MRDB-minimal.shp")
+m1 <- tm_shape(uk_shape_file) + 
+	      tm_lines("yellow")
+m1
+```
+```{r}
+reg_name <- "East of England"
+# define center of map
+lat_center <- as.numeric(mean(uk_traffic_data[which((uk_traffic_data$year == 2018) & (uk_traffic_data$region_name == reg_name)),]$latitude))
+long_center <- as.numeric(mean(uk_traffic_data[which((uk_traffic_data$year == 2018) & (uk_traffic_data$region_name == reg_name)),]$longitude)) 
+###road nmap
+car_road_map_table <- uk_road_shp_map[which((uk_road_shp_map$year == 2018) & (uk_road_shp_map$vehicles_names == "Cars and Taxis") & (uk_road_shp_map$region_name == reg_name)),]
+pd_road_map_table <- uk_road_shp_map[which((uk_road_shp_map$year == 2018) & (uk_road_shp_map$vehicles_names == "Pedal Cycles") & (uk_road_shp_map$region_name == reg_name)),]
+lor_road_map_table <- uk_road_shp_map[which((uk_road_shp_map$year == 2018) & (uk_road_shp_map$vehicles_names == "Lorries and Vans") & (uk_road_shp_map$region_name == reg_name)),]
+bus_road_map_table <- uk_road_shp_map[which((uk_road_shp_map$year == 2018) & (uk_road_shp_map$vehicles_names == "Buses and Coaches") & (uk_road_shp_map$region_name == reg_name)),]
+
+##
+unique(uk_traffic_data$region_name)
+head(road_map_table, 50)
+names(road_map_table)
+##road_map_table[, c("CP_Number", "road_name")]
+##SpatialLinesDataFrame(road_map_table[, c("CP_Number", "road_name")], data = road_map_table)
+pal <- colorNumeric("RdBu", NULL)
+car_traffic_flow <- car_road_map_table$avg_traffic_flow
+pd_traffic_flow <- pd_road_map_table$avg_traffic_flow
+lor_traffic_flow <- lor_road_map_table$avg_traffic_flow
+bus_traffic_flow <- bus_road_map_table$avg_traffic_flow
+shape_map <- leaflet() %>% 
+  addTiles() %>% 
+  addProviderTiles(providers$Stamen.TonerLite,
+        options = providerTileOptions(noWrap = TRUE)
+      ) %>%
+  addPolylines(data = car_road_map_table, stroke = TRUE, weight = 4.0, color = pal(car_traffic_flow),
+               fillColor = pal(car_traffic_flow),
+               fillOpacity = 1.5, smoothFactor = 0.5, group = "Cars and Taxis") %>%
+  addPolylines(data = bus_road_map_table, stroke = TRUE, weight = 4.0, color = pal(bus_traffic_flow),
+               fillColor = pal(bus_traffic_flow),
+               fillOpacity = 1.5, smoothFactor = 0.5, group = "Buses and Coaches") %>%
+  addPolylines(data = pd_road_map_table, stroke = TRUE, weight = 4.0, color = pal(pd_traffic_flow),
+               fillColor = pal(pd_traffic_flow),
+               fillOpacity = 1.5, smoothFactor = 0.5, group = "Pedal Cycles") %>%
+  addPolylines(data = lor_road_map_table, stroke = TRUE, weight = 4.0, color = pal(lor_traffic_flow),
+               fillColor = pal(lor_traffic_flow),
+               fillOpacity = 1.5, smoothFactor = 0.5, group = "Lorries and Vans") %>%
+  setView(long_center,lat_center, zoom = 10) %>%
+  addLegend(pal = pal, values = car_traffic_flow, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)), position = "bottomleft", group = "Cars and Taxis") %>%
+  addLegend(pal = pal, values = bus_traffic_flow, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)), position = "bottomleft", group = "Buses and Coaches") %>%
+  addLegend(pal = pal, values = pd_traffic_flow, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)), position = "bottomleft", group = "Pedal Cycles") %>%
+  addLegend(pal = pal, values = lor_traffic_flow, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)), position = "bottomleft", group = "Lorries and Vans") %>%
+  addResetMapButton() %>%
+  addLayersControl(overlayGroups = c("Cars and Taxis", "Buses and Coaches", "Pedal Cycles", "Lorries and Vans"),
+                   options = layersControlOptions(collapsed = FALSE)) %>% 
+  hideGroup(c("Buses and Coaches", "Pedal Cycles", "Lorries and Vans"))
+
+shape_map
+
+names(road_map_table)
+unique(uk_road_shp_map$region_name)
+```
+```{r}
+# define center of map
+lat_center <- as.numeric(mean(uk_traffic_data[which((uk_traffic_data$year == 2005) & (uk_traffic_data$region_name == "London")),]$latitude))
+long_center <- as.numeric(mean(uk_traffic_data[which((uk_traffic_data$year == 2005) & (uk_traffic_data$region_name == "London")),]$longitude))
+
+names(uk_lad_shp_map)
+###lad nmap
+car_lad_map_table <- uk_lad_shp_map[which((uk_lad_shp_map$year == 2005) & (uk_lad_shp_map$vehicles_names == "Cars and Taxis") & (uk_lad_shp_map$region_name == "London")),]
+bus_lad_map_table <- uk_lad_shp_map[which((uk_lad_shp_map$year == 2005) & (uk_lad_shp_map$vehicles_names == "Buses and Coaches") & (uk_lad_shp_map$region_name == "London")),]
+pd_lad_map_table <- uk_lad_shp_map[which((uk_lad_shp_map$year == 2005) & (uk_lad_shp_map$vehicles_names == "Pedal Cycles") & (uk_lad_shp_map$region_name == "London")),]
+lor_lad_map_table <- uk_lad_shp_map[which((uk_lad_shp_map$year == 2005) & (uk_lad_shp_map$vehicles_names == "Lorries and Vans") & (uk_lad_shp_map$region_name == "London")),]
+
+##
+unique(uk_lad_shp_map$vehicles_names)
+pal <- colorNumeric("plasma", NULL)
+car_lad_traffic_flow <- car_lad_map_table$avg_traffic_flow
+pd_lad_traffic_flow <- pd_lad_map_table$avg_traffic_flow
+lor_lad_traffic_flow <- lor_lad_map_table$avg_traffic_flow
+bus_lad_traffic_flow <- bus_lad_map_table$avg_traffic_flow
+##avg_reg_traffic_flow <- lad_reg_map_table$avg_traffic_flow
+reg_lad_map <- leaflet() %>%
+  addTiles() %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  setView(long_center,lat_center, zoom = 10) %>%
+  addPolygons(data = car_lad_map_table, stroke = FALSE, smoothFactor = 0.3, fillOpacity = 0.7,
+    fillColor = pal(car_lad_traffic_flow), group = "Cars and Taxis",
+    label = ~paste0(local_authority_name,"(",region_name,")", ": ", formatC(car_lad_traffic_flow, big.mark = ",")),
+    labelOptions = labelOptions(style = list(
+                                  "color" = "black",
+                                  "font-family" = "Cambria",
+                                  "font-style" = "italic",
+                                  "box-shadow" = "3px 3px rgba(0,0,0,0.25)",
+                                  "font-size" = "14px",
+                                  "border-color" = "rgba(0,0,0,0.5)"
+                                  ), direction = "auto")
+    )  %>%
+  addPolygons(data = bus_lad_map_table, stroke = FALSE, smoothFactor = 0.3, fillOpacity = 0.7,
+    fillColor = pal(bus_lad_traffic_flow), group = "Buses and Coaches",
+    label = ~paste0(local_authority_name,"(",region_name,")", ": ", formatC(bus_lad_traffic_flow, big.mark = ",")),
+    labelOptions = labelOptions(style = list(
+                                  "color" = "black",
+                                  "font-family" = "Cambria",
+                                  "font-style" = "italic",
+                                  "box-shadow" = "3px 3px rgba(0,0,0,0.25)",
+                                  "font-size" = "14px",
+                                  "border-color" = "rgba(0,0,0,0.5)"
+                                  ), direction = "auto")
+    )  %>%
+  addPolygons(data = pd_lad_map_table, stroke = FALSE, smoothFactor = 0.3, fillOpacity = 0.7,
+    fillColor = pal(pd_lad_traffic_flow), group = "Pedal Cycles",
+    label = ~paste0(local_authority_name,"(",region_name,")", ": ", formatC(pd_lad_traffic_flow, big.mark = ",")),
+    labelOptions = labelOptions(style = list(
+                                  "color" = "black",
+                                  "font-family" = "Cambria",
+                                  "font-style" = "italic",
+                                  "box-shadow" = "3px 3px rgba(0,0,0,0.25)",
+                                  "font-size" = "14px",
+                                  "border-color" = "rgba(0,0,0,0.5)"
+                                  ), direction = "auto")
+    )  %>%
+  addPolygons(data = lor_lad_map_table, stroke = FALSE, smoothFactor = 0.3, fillOpacity = 0.7,
+    fillColor = pal(lor_lad_traffic_flow), group = "Lorries and Vans",
+    label = ~paste0(local_authority_name,"(",region_name,")", ": ", formatC(lor_lad_traffic_flow, big.mark = ",")),
+    labelOptions = labelOptions(style = list(
+                                  "color" = "black",
+                                  "font-family" = "Cambria",
+                                  "font-style" = "italic",
+                                  "box-shadow" = "3px 3px rgba(0,0,0,0.25)",
+                                  "font-size" = "14px",
+                                  "border-color" = "rgba(0,0,0,0.5)"
+                                  ), direction = "auto")
+    )  %>%
+  addLegend(data = car_lad_map_table, pal = pal, values = ~avg_traffic_flow, opacity = 0.7,
+    labFormat = labelFormat(transform = function(x) round(x)), position = "bottomleft",
+    title = ~paste0("#Miles Travelled (", (unique(year)), ")"),
+    group = "Cars and Taxis") %>%
+  addLegend(data = bus_lad_map_table, pal = pal, values = ~avg_traffic_flow, opacity = 0.7,
+    labFormat = labelFormat(transform = function(x) round(x)), position = "bottomleft",
+    title = ~paste0("#Miles Travelled (", (unique(year)), ")"),
+    group = "Buses and Coaches") %>%
+  addLegend(data = pd_lad_map_table, pal = pal, values = ~avg_traffic_flow, opacity = 0.7,
+    labFormat = labelFormat(transform = function(x) round(x)), position = "bottomleft",
+    title = ~paste0("#Miles Travelled (", (unique(year)), ")"),
+    group = "Pedal Cycles") %>%
+  addLegend(data = lor_lad_map_table, pal = pal, values = ~avg_traffic_flow, opacity = 0.7,
+    labFormat = labelFormat(transform = function(x) round(x)), position = "bottomleft",
+    title = ~paste0("#Miles Travelled (", (unique(year)), ")"),
+    group = "Lorries and Vans") %>%
+  addResetMapButton() %>%
+  addLayersControl(overlayGroups = c("Cars and Taxis", "Buses and Coaches", "Pedal Cycles", "Lorries and Vans"),
+                   options = layersControlOptions(collapsed = FALSE)) %>% 
+  hideGroup(c("Buses and Coaches", "Pedal Cycles", "Lorries and Vans"))
+
+
+reg_lad_map
+```
+```{r}
+names(uk_traffic_data)
+unique(uk_road_shp_map$vehicles_names)
+```
+

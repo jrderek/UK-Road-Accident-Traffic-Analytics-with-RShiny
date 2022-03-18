@@ -1,0 +1,1831 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+library(plotly)
+library(ggplot2)
+#library(tidyverse)
+library(tibble)
+library(dplyr)
+library(tidyr)
+library("stringr")
+library("RColorBrewer")
+library(geojsonR)
+library("purrr")
+rgdal::getGDALVersionInfo(str = "--version")
+library(chron)
+library("lubridate")
+library(leaflet)
+library(leaflet.extras)
+library(magrittr)
+library(tmap)
+library("sf")
+library("rgdal")
+library(mapview)
+library(ggmap)
+library(plyr)
+#install.packages("ggmap")
+library(leafsync)
+library(leaflegend)
+library(raster)
+library(magick)
+library(caTools)
+#install.packages('caTools')
+#install.packages("leaflegend")
+#install.packages("leaflet.extras")
+#install.packages("jsonlite", type = "source")
+#remove.packages("rgdal")
+library(devtools)
+#install.packages("magick")
+#install_github("r-spatial/sf")
+#install.packages("geojsonR")
+#devtools::install_version("tidyverse", version = "1.1.1", repos = "http://cran.us.r-project.org")*/
+#rm(list = ls())
+```
+```{r}
+uk_accident_1 <- read.csv("uk-data/accidents_2005_to_2007.csv",
+                            header = T, sep = ",")
+uk_accident_2 <- read.csv("uk-data/accidents_2009_to_2011.csv",
+                            header = T, sep = ",")
+uk_accident_3 <- read.csv("uk-data/accidents_2012_to_2014.csv",
+                            header = T, sep = ",")
+
+uk_accident_data <- do.call("rbind", list(uk_accident_1, uk_accident_2, uk_accident_3))
+
+
+##rm(list = ls())
+head(uk_accident_data, 10)
+```
+
+```{r}
+##check for NULL values in dataframe
+sapply(uk_accident_data, function(x) sum(is.na(x)))
+```
+```{r}
+#columns with empty strings
+names(uk_accident_data)
+uk_accident_data%>%
+gather(x, value, Accident_Index:Year)%>%
+group_by(x)%>%
+tally(value == "")
+##replace empty strings with NULL
+uk_accident_data <- mutate_all(uk_accident_data, list(~na_if(.,"")))
+```
+```{r}
+##check for NULL values in dataframe
+sapply(uk_accident_data, function(x) sum(is.na(x)))
+
+##drop columns
+dropCols = c('Junction_Detail', 'Junction_Control', 'LSOA_of_Accident_Location')
+
+uk_accident_data <- uk_accident_data[ , !(names(uk_accident_data) %in% dropCols)]
+
+##drop null values
+uk_accident_data <- na.omit(uk_accident_data)
+
+##check for NULL values
+sapply(uk_accident_data, function(x) sum(is.na(x)))
+```
+```{r}
+#columns with None
+uk_accident_data%>%
+gather(x, value, Accident_Index:Year)%>%
+group_by(x)%>%
+tally(value == "None")
+##drop columns
+dropCols = c('Special_Conditions_at_Site', 'Carriageway_Hazards')
+
+uk_accident_data <- uk_accident_data[ , !(names(uk_accident_data) %in% dropCols)]
+names(uk_accident_data)
+```
+
+```{r}
+uk_lad_1 <- read.csv("uk-data/LAD.csv",
+                     header = T, sep = ",")
+uk_lad_2 <- read.csv("uk-data/LAD3.csv",
+                     header = T, sep = ",")
+uk_lad_3 <- read.csv("uk-data/LAD4.csv",
+                     header = T, sep = ",")
+uk_lad_2
+#merge lad2 and lad3
+uk_lad_merge <- merge(uk_lad_2, uk_lad_3, by = "Sub.Group", incomparables = NA)
+#rename all Code cols to LAD_Code
+uk_lad_merge <- uk_lad_merge %>% dplyr::rename("LAD_Code" = "ONS.Code")
+uk_lad_1 <- uk_lad_1 %>% dplyr::rename("LAD_Code" = "Code")
+uk_accident_data <- uk_accident_data %>% dplyr::rename("LAD_Code" = "Local_Authority_.Highway.")
+```
+
+```{r}
+uk_lad_merg <- merge(uk_lad_merge, uk_lad_1, by = "LAD_Code", incomparables = NA)
+uk_accident_data <- merge(uk_lad_merg, uk_accident_data, by = "LAD_Code", incomparables = NA)
+
+head(uk_accident_data,10)
+```
+```{r}
+#extract date, time components to individual columns
+head(uk_accident_data, 10)
+unique(uk_accident_data$Year)
+uk_accident_data$Date
+```
+
+
+
+```{r}
+uk_accident_data$Date <- parse_date_time(uk_accident_data$Date, orders = c("ymd", "dmy", "mdy"))
+uk_accident_data$Time <- paste(uk_accident_data$Time,"00", sep=":")
+uk_accident_data$Time <- chron(times=uk_accident_data$Time)
+uk_accident_data$hour <- format(strptime(uk_accident_data$Time,"%H:%M:%S"),'%H')
+uk_accident_data$month <- month.abb[month(uk_accident_data$Date)]
+uk_accident_data$Day_of_Week <- wday(uk_accident_data$Day_of_Week, label = TRUE)
+unique(uk_accident_data$Day_of_Week)
+head(uk_accident_data, 10)
+names(uk_accident_data)
+```
+```{r}
+##transform region names
+##rename region in json df--the order needs to be the same
+json_regions_names = c("North East","North West","Yorkshire and The Humber","East Midlands","West Midlands",
+                       "Eastern","London","South East","South West","Wales","Scotland")
+region_names = c("North East, England","North West, England","Yorkshire and The Humber, England","East Midlands, England","West Midlands, England","East, England","London, England","South East, England","South West, England",
+                 "Wales","Scotland")
+uk_accident_data$Region.Country <- mapvalues(uk_accident_data$Region.Country, from= region_names, to=json_regions_names)
+
+```
+
+
+
+```{r}
+uk_acc_year_region <- uk_accident_data %>% 
+  dplyr::select(Year, Number_of_Casualties, Region.Country) %>%
+  dplyr::group_by(Year, Region.Country) %>% 
+  dplyr::summarize(num_of_casualties = sum(Number_of_Casualties, na.rm = TRUE)) %>% 
+  dplyr::arrange(desc(Year), desc(num_of_casualties))
+
+uk_acc_year_region
+```
+
+```{r}
+syms <- c('square', 'square-open', 'square-dot', 'square-open-dot', 'diamond', 'diamond-open', 'diamond-dot', 'diamond-open-dot', 'cross', 'cross-open', 'cross-dot', 'cross-open-dot','star-dot', 'star-open-dot', 'hexagram', 'hexagram-open', 'hexagram-dot', 'hexagram-open-dot','star-triangle-up', 'star-triangle-up-open', 'star-triangle-up-dot', 'star-triangle-up-open-dot', 'star-triangle-down', 'star-triangle-down-open', 'star-triangle-down-dot', 'star-triangle-down-open-dot', 'star-square','star-square-open', 'star-square-dot', 'star-square-open-dot',  'hash', 'hash-open', 'hash-dot', 'hash-open-dot', 'triangle-up', 'triangle-up-open', 'triangle-up-dot', 'triangle-up-open-dot', 'triangle-down', 'triangle-down-open', 'triangle-down-dot', 'triangle-down-open-dot', 'triangle-left', 'triangle-left-open', 'hourglass', 'hourglass-open', 'bowtie', 'bowtie-open', 'circle-cross', 'circle-cross-open', 'circle-x')
+region_symbols <- c('diamond-open-dot', 'cross', 'cross-open', 'triangle-left-open', 'hourglass', 'hourglass-open',
+                    'star-triangle-down-dot', 'star-square','star-square-open',
+                    'hourglass', 'bowtie')
+
+l <- list(
+  font = list(
+    family = "sans-serif",
+    size = 16,
+    color = "#434C5E"),
+  bgcolor = "#d6d8da")
+
+fig <- uk_acc_year_region %>% 
+  ungroup() %>% plot_ly(x = ~Year, y = ~num_of_casualties, type = 'scatter',
+               mode = 'lines+markers', symbol = ~Region.Country, symbols = region_symbols,
+               marker = list(size = 10, colorscale = 'viridis'), 
+               width = 1000, height = 550) %>%
+  layout(title = "<b> Road Accidents in UK </b>",
+         titlefont = list(size = 18, color = "#434C5E", family = "Arial"), 
+         plot_bgcolor  = "#d6d8da",
+         paper_bgcolor = "#d6d8da",
+         xaxis = list(title="<b> Region in UK </b>", color='#434C5E', font = list(family = "Cambria", size = 16),
+                      tickfont = list(color = '#434C5E', family = "Cambria", size = 16)),
+         yaxis = list(title = '<b> Number of Casualties </b>', color='#434C5E', 
+                      font = list(size = 16),
+                      tickfont = list(color = '#434C5E', family = "Cambria", size = 16)), legend = l,
+         margin = list(b = 80, t=80, l=180, r=180))
+fig
+
+##colors = brewer.pal(length(unique(uk_acc_year_region$Region.Country)),"Paired")
+##plot_ly(data = veh_cyl, x = vehicles, y = cylinders, type = "bar", text = cylinders, textposition = "auto") %>% 
+  ##layout(title = "Number of Vehicles in mtcars with 4, 6, and 8 Cylinders",
+         ##titlefont = list(size = 28, color = "orange", family = "Calibri"),
+    ##yaxis = list(title = "Number of Vehicles",
+                 ##titlefont = list(color = "black", family = "Arial", size = 26),
+                 ##tickfont = list(color = "black", family = "Arial", size = 20)),
+    ##xaxis = list(title = "Number of Cylinders",
+                 ##titlefont = list(color = "red", family = "Times New Roman", size = 22),
+                 ##tickfont = list(color = "green", family = "Cambria", size = 18)))%>% 
+  ##layout(margin = list( 
+                ##l = 10,
+              ##r = 10,
+              ##b = 0,
+              ##t = 40)) # Use the layout(margin) function to adjust the margins of the graph
+```
+
+```{r}
+colors <- c('#962c39', '#a26e53', '#a1c078', 'darkslategrey', 'darkslateblue', '#7803d5',
+                "#6b3969", "#c4446b", "#b77168", "#123429", "#2c8160")
+
+fig <- uk_acc_year_region %>% 
+  ungroup() %>% plot_ly(y = ~num_of_casualties, type = "box",
+               color = ~Region.Country, colors = colors, width = 1000, height = 700) %>%
+  layout(title = "Road Accidents across all by Regions in UK",
+         titlefont = list(size = 18, color = "#434C5E", family = "Arial"), 
+         plot_bgcolor  = "#d6d8da",
+         paper_bgcolor = "#d6d8da",
+         xaxis = list(title="", color='#434C5E', font = list(family = "Cambria", size = 16),
+                      tickangle = 45, tickfont = list(color = '#434C5E', family = "Cambria", size = 16)),
+         yaxis = list(title = 'Number of Casualties', color='#434C5E', 
+                      font = list(size = 16),
+                      tickfont = list(color = '#434C5E', family = "Cambria", size = 16)), legend = l,
+         margin = list(b = 80, t=80, l=180, r=180))
+fig
+```
+
+```{r}
+uk_acc_higway <- uk_accident_data %>% 
+  dplyr::select(Number_of_Casualties, Year, Highway.Authority) %>%
+  dplyr::group_by(Year, Highway.Authority) %>% 
+  dplyr::summarize(num_of_casualties = sum(Number_of_Casualties, na.rm = TRUE)) %>% 
+  dplyr::arrange(desc(Year), desc(num_of_casualties)) %>%
+  dplyr::mutate(rank = rank(desc(num_of_casualties)))
+
+uk_acc_highway_2014 <- uk_acc_higway[which((uk_acc_higway$Year == 2010)),]
+notorious_highway <- head(uk_acc_highway_2014$Highway.Authority, 20)
+safe_highway <- tail(uk_acc_highway_2014$Highway.Authority, 20)
+uk_acc_highway_2014
+```
+
+```{r}
+uk_notorious_acc_highway <- uk_accident_data %>% 
+  dplyr::select(Year, Number_of_Casualties, Highway.Authority) %>%
+  dplyr::filter(Highway.Authority %in% notorious_highway) %>%
+  dplyr::group_by(Year, Highway.Authority) %>% 
+  dplyr::summarize(num_of_casualties = sum(Number_of_Casualties, na.rm = TRUE)) %>% 
+  dplyr::arrange(desc(Year), (num_of_casualties))
+
+names(uk_notorious_acc_highway)
+
+uk_safe_acc_highway <- uk_accident_data %>% 
+  dplyr::select(Year, Number_of_Casualties, Highway.Authority) %>%
+  dplyr::filter(Highway.Authority %in% safe_highway) %>%
+  dplyr::group_by(Year, Highway.Authority) %>% 
+  dplyr::summarize(num_of_casualties = sum(Number_of_Casualties, na.rm = TRUE)) %>% 
+  dplyr::arrange(desc(Year), desc(num_of_casualties))
+
+##save
+write.csv(uk_notorious_acc_highway, file = "uk-data/uk_notorious_acc_highway.csv", row.names = FALSE)
+write.csv(uk_safe_acc_highway, file = "uk-data/uk_safe_acc_highway.csv", row.names = FALSE)
+```
+```{r}
+fig <- uk_notorious_acc_highway %>% 
+  ungroup() %>% plot_ly(x =~num_of_casualties, y =~Highway.Authority,
+               orientation = 'h',
+             width=1200, height = 750, type = 'bar',
+             marker = list(color = colorRampPalette(brewer.pal(10,"OrRd"))(20)),
+             text = ~paste("Highway Authority:", Highway.Authority,
+                           '</br></br>', "Number of Casualties:", num_of_casualties,
+                           '</br></br>',"Year:", Year),
+             hoverinfo = text,
+             frame = ~Year,
+             showlegend = FALSE) %>%
+  layout(title = "<b> Road Accidents in UK </br>",
+         titlefont = list(size = 18, color = "#434C5E", family = "Cambria"),
+         margin = list(b = 90, t=90, l=180, r=180),
+         plot_bgcolor  = "#d6d8da",
+         paper_bgcolor = "#d6d8da",
+         yaxis = list(title = "",
+                 titlefont = list(color='#434C5E', family = "Cambria", size = 16),
+                 tickfont = list(color='#434C5E', family = "Cambria", size = 16),
+                 categoryorder = "array",
+                 categoryarray = ~uk_notorious_acc_highway$Highway.Authority),
+         xaxis = list(title = "<b> Number of Casualties </br>",
+                 titlefont = list(color='#434C5E', family = "Cambria", size = 16),
+                 tickfont = list(color='#434C5E', family = "Cambria", size = 16),
+                 tickangle = 45),
+         showlegend = FALSE) %>%
+  animation_slider( currentvalue = list(prefix = "Year: ", 
+                                        font = list(color='#434C5E', family = "Cambria", size = 16))
+  ) %>%
+
+  animation_opts(
+
+    1000, easing = "elastic", redraw = FALSE
+
+  )
+fig
+```
+```{r}
+fig <- uk_safe_acc_highway %>% 
+  ungroup() %>% plot_ly(x =~num_of_casualties, y =~Highway.Authority,
+               orientation = 'h',
+             width=1000, height = 750, type = 'bar',
+             marker = list(color = colorRampPalette(brewer.pal(10,"Blues"))(20)),
+             text = ~paste("Highway Authority:", Highway.Authority,
+                           '</br></br>', "Number of Casualties:", num_of_casualties,
+                           '</br></br>',"Year:", Year),
+             hoverinfo = text,
+             frame = ~Year,
+             showlegend = FALSE) %>%
+  layout(title = "<b> Road Accidents in UK </br>",
+         titlefont = list(size = 18, color = "#434C5E", family = "Cambria"),
+         margin = list(b = 90, t=90, l=180, r=180),
+         plot_bgcolor  = "#d6d8da",
+         paper_bgcolor = "#d6d8da",
+         yaxis = list(title = "",
+                 titlefont = list(color='#434C5E', family = "Cambria", size = 16),
+                 tickfont = list(color='#434C5E', family = "Cambria", size = 16),
+                 categoryorder = "array",
+                 categoryarray = ~uk_notorious_acc_highway$Highway.Authority),
+         xaxis = list(title = "<b> Number of Casualties </br>",
+                 titlefont = list(color='#434C5E', family = "Cambria", size = 16),
+                 tickfont = list(color='#434C5E', family = "Cambria", size = 16),
+                 tickangle = 45),
+         showlegend = FALSE) %>%
+  animation_slider( currentvalue = list(prefix = "Year: ", 
+                                        font = list(color='#434C5E', family = "Cambria", size = 16))
+  ) %>%
+
+  animation_opts(
+
+    1000, easing = "elastic", redraw = FALSE
+
+  )
+fig
+```
+
+```{r fig.width=12,fig.height=11}
+fig <- uk_notorious_acc_highway %>% 
+  ungroup() %>% plot_ly(x =~num_of_casualties, y =~Highway.Authority,
+               orientation = 'h',
+               color = ~Year,
+             width=1200, height = 800, type = 'bar',
+             text = ~paste("Highway Authority:", Highway.Authority,
+                           '</br></br>', "Number of Casualties:", num_of_casualties,
+                           '</br></br>',"Year:", Year),
+             hoverinfo = text,
+             showlegend = FALSE) %>%
+  layout(title = "Road Accidents in UK",
+         titlefont = list(size = 18, color = "lightslategray", family = "Arial"),
+         margin = list(b = 80, t=80, l=180, r=180),
+         barmode = "stack", plot_bgcolor  = "rgba(0, 0, 0)",
+         paper_bgcolor = "rgba(0, 0, 0)",
+         yaxis = list(title = "",
+                 titlefont = list(color='lightslategray', family = "Arial", size = 16),
+                 tickfont = list(color='lightslategray', family = "Arial", size = 16),
+                 categoryorder = "array",
+                 categoryarray = ~uk_notorious_acc_highway$Highway.Authority),
+         xaxis = list(title = "Number of Casualties",
+                 titlefont = list(color='lightslategray', family = "Arial", size = 16),
+                 tickfont = list(color='lightslategray', family = "Arial", size = 16),
+                 tickangle = 45),
+         showlegend = FALSE)
+fig
+```
+```{r}
+uk_month_acc <- uk_accident_data %>% 
+  dplyr::select(Number_of_Casualties, month, Year, Region.Country) %>%
+  dplyr::group_by(month, Year, Region.Country) %>% 
+  dplyr::summarize(num_of_casualties = sum(Number_of_Casualties, na.rm = TRUE)) %>% 
+  dplyr::arrange(factor(month, levels = month.abb), num_of_casualties)
+
+uk_month_acc$month <- factor(uk_month_acc$month, levels = month.abb)
+
+##save
+write.csv(uk_month_acc, file = "uk-data/uk_month_acc.csv", row.names = FALSE)
+```
+
+```{r}
+l <- list(
+  font = list(
+    family = "sans-serif",
+    size = 16,
+    color = "#434C5E"),
+  bgcolor = "#d6d8da")
+
+##filter(Year == 2014) %>%
+
+fig <- uk_month_acc %>%
+  ungroup() %>% plot_ly(x = ~month, y = ~num_of_casualties, type = 'scatter',
+               mode = 'lines+markers', symbol = ~Region.Country, symbols = sample(syms,length(unique(uk_month_acc$Region.Country))),
+               frame = ~Year,
+               marker = list(size = 10, colorscale = 'viridis'), 
+               width = 1000, height = 650) %>%
+  layout(title = "<b> Road Accidents in UK </br>",
+         titlefont = list(size = 18, color = "#434C5E", family = "Arial"), 
+         plot_bgcolor  = "#d6d8da",
+         paper_bgcolor = "#d6d8da",
+         xaxis = list(title="<b> Months </br>", color="#434C5E", 
+                      font = list(family = "Cambria", size = 16),
+                      tickfont = list(color = '#434C5E', family = "Cambria", size = 16),
+                      titlefont = list(color = '#434C5E', family = "Cambria", size = 16)),
+         yaxis = list(title = '<b> Number of Casualties </br>', color="#434C5E", 
+                      font = list(family = "Cambria", size = 16),
+                      tickfont = list(color = '#434C5E', family = "Cambria", size = 16),
+                      titlefont = list(color = '#434C5E', family = "Cambria", size = 16)), 
+         legend = l) %>%
+  animation_slider( currentvalue = list(prefix = "Year: ", 
+                                        font = list(color='#434C5E', family = "Cambria", size = 16))
+  ) %>% 
+  animation_opts(1000, easing = "elastic", redraw = FALSE)
+
+fig
+```
+```{r}
+uk_hour_acc <- uk_accident_data %>% 
+  dplyr::select(Number_of_Casualties, Year, hour, Region.Country) %>%
+  dplyr::group_by(Year, hour, Region.Country) %>% 
+  dplyr::summarize(num_of_casualties = sum(Number_of_Casualties, na.rm = TRUE)) %>% 
+  dplyr::arrange(hour, num_of_casualties)
+
+uk_hour_acc
+#save
+write.csv(uk_hour_acc, file = "uk-data/uk_hour_acc.csv", row.names = FALSE)
+```
+
+```{r}
+l <- list(
+  font = list(
+    family = "sans-serif",
+    size = 14,
+    color = "#434C5E"),
+  bgcolor = "#d6d8da")
+
+fig <- uk_hour_acc %>%
+  ungroup() %>% plot_ly(x = ~hour, y = ~num_of_casualties, type = 'scatter',
+               mode = 'lines+markers', symbol = ~Region.Country, symbols = sample(syms,length(unique(uk_month_acc$Region.Country))),
+               frame = ~Year,
+               marker = list(size = 10), 
+               width = 1000, height = 650) %>%
+  layout(title = "Road Accidents across all hours in UK",
+         titlefont = list(size = 20, color = "#434C5E", family = "Cambria"), 
+         plot_bgcolor  = "#d6d8da",
+         paper_bgcolor = "#d6d8da",
+         xaxis = list(title="<b> Hours of Day </br>", color="#434C5E", font = list(family = "Cambria", size = 16),
+                      tickfont = list(color = '#434C5E', family = "Cambria", size = 16),
+                      titlefont = list(color = '#434C5E', family = "Cambria", size = 16),
+                      autotick = F, dtick = 1),
+         yaxis = list(title = '<b> Number of Casualties </br>', color="#434C5E", 
+                      font = list(family = "Cambria", size = 16),
+                      tickfont = list(color = '#434C5E', family = "Cambria", size = 16),
+                      titlefont = list(color = '#434C5E', family = "Cambria", size = 16)), legend = l,
+         margin = list(b = 80, t=80, l=180, r=180)) %>%
+  animation_slider( currentvalue = list(prefix = "Year: ", 
+                                        font = list(color='#434C5E', family = "Cambria", size = 16))
+  ) %>% 
+  animation_opts(1000, easing = "elastic", redraw = FALSE)
+fig
+```
+
+```{r}
+uk_casualties_per_accident <- uk_accident_data %>% 
+  dplyr::select(Number_of_Casualties, Year, Region.Country) %>%
+  dplyr::group_by(Year, Region.Country) %>% 
+  dplyr::summarize(num_of_casualties = sum(Number_of_Casualties, na.rm = TRUE)) %>%
+  dplyr::arrange(desc(Year), num_of_casualties)
+
+#median = median(Number_of_Casualties, na.rm = T),
+#QR1 = quantile(Number_of_Casualties, c(0.25), na.rm = T),
+#QR3 = quantile(Number_of_Casualties, c(0.75), na.rm = T),
+#min_of_casualties = min(Number_of_Casualties, na.rm = TRUE),
+#mean_of_casualties = mean(Number_of_Casualties, na.rm = TRUE)
+unique(uk_casualties_per_accident$Region.Country)
+```
+```{r}
+uk_casualties_per_accident[which((uk_casualties_per_accident$Year == 2006) & (uk_casualties_per_accident$Region.Country == "London") & (uk_casualties_per_accident$Region.Country == "London")),]$num_of_casualties
+
+```
+
+```{r}
+l <- list(
+  font = list(
+    family = "sans-serif",
+    size = 14,
+    color = 'lightslategray'),
+  bgcolor = "rgba(0, 0, 0)")
+fig <- uk_casualties_per_accident %>% 
+  ungroup() %>% plot_ly(y = ~num_of_casualties, type = "box",
+               color = ~Region.Country, width = 1000, height = 700) %>%
+  layout(title = "Road Accidents in UK",
+         titlefont = list(size = 18, color = "lightslategray", family = "Arial"), 
+         plot_bgcolor  = "rgba(0, 0, 0)",
+         paper_bgcolor = "rgba(0, 0, 0)",
+         xaxis = list(title="", color='lightslategray', font = list(family = "Cambria", size = 14),
+                      tickangle = 45),
+         yaxis = list(title = 'Number of Casualties', color='lightslategray', 
+                      font = list(size = 16)), legend = l,
+         margin = list(b = 140, t=100, l=100, r=100))
+fig
+```
+
+```{r}
+head(uk_accident_data, 10)
+uk_accident_data$month_yr <- format(uk_accident_data$Date, "%Y-%m")
+```
+```{r}
+uk_cas_mth_per_accident <- uk_accident_data %>% 
+  dplyr::select(Number_of_Casualties, month_yr, Year, Region.Country) %>%
+  dplyr::filter(Year == 2014) %>%
+  dplyr::group_by(Year, month_yr, Region.Country) %>% 
+  dplyr::summarize(num_of_casualties = sum(Number_of_Casualties, na.rm = TRUE)) %>%
+  dplyr::arrange(desc(Year), num_of_casualties)
+uk_cas_mth_per_accident
+```
+```{r}
+l <- list(
+  font = list(
+    family = "sans-serif",
+    size = 14,
+    color = 'lightslategray'),
+  bgcolor = "rgba(0, 0, 0)")
+fig <- uk_cas_mth_per_accident %>% 
+  ungroup() %>% 
+  plot_ly(y = ~num_of_casualties, type = "box",
+               color = ~Region.Country, width = 1000, height = 700) %>%
+  layout(title = "Road Accidents/Casualties in UK per Month",
+         titlefont = list(size = 18, color = "lightslategray", family = "Arial"), 
+         plot_bgcolor  = "rgba(0, 0, 0)",
+         paper_bgcolor = "rgba(0, 0, 0)",
+         xaxis = list(title="", color='lightslategray', font = list(family = "Cambria", size = 14),
+                      tickangle = 45),
+         yaxis = list(title = 'Number of Casualties', color='lightslategray', 
+                      font = list(size = 16)), legend = l,
+         margin = list(b = 140, t=100, l=100, r=100))
+fig
+```
+
+
+```{r}
+names(uk_casualties_per_accident)
+
+l <- list(
+  font = list(
+    family = "Arial",
+    size = 14,
+    color = '#434C5E'),
+  bgcolor = "#d6d8da")
+#bg_color <- "rgba(0, 0, 0)"
+colors <- c('#962c39', '#a26e53', '#a1c078', 'darkslategrey', 'darkslateblue', '#7803d5',
+            "#6b3969", "#c4446b", "#b77168", "#123429", "#2c8160")
+##filter(Year == 2005) %>%
+
+uk_casualties_per_accident %>%
+  ungroup() %>% 
+  plot_ly(labels = ~Region.Country, values = ~num_of_casualties,
+        marker = list(colors = colors),
+        frame = ~Year,
+        insidetextfont = list(color = '#FFFFFF', size = 14), width=1000, height=650) %>% 
+  add_pie(hole = 0.6) %>% 
+  layout(title = "Road Accidents in UK",  
+         titlefont = list(size = 18, color = '#434C5E', family = "Arial"),
+         showlegend = T,
+         xaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE, color='#434C5E'),
+         yaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE, color='#434C5E'),
+         plot_bgcolor  = "#d6d8da",
+         paper_bgcolor = "#d6d8da",
+         legend = l,
+          margin = list(b = 40, t=50, l=50, r=20)) %>%
+  animation_slider( currentvalue = list(prefix = "Year: ", 
+                                        font = list(color='#434C5E', family = "Cambria", size = 16))
+  ) %>% 
+  animation_opts(1200, easing = "elastic", redraw = FALSE)
+
+```
+```{r}
+##recode accident severity column
+uk_accident_data <- uk_accident_data %>% mutate(Accident_Severity =recode(Accident_Severity,
+                                                      `1`="Fatal",
+                                                      `2`="Serious",
+                                                      `3`="Slight"))
+#head(uk_accident_data, 10)
+#1: "Fatal", 2: "Serious", 3: "Slight"
+uk_accident_severity
+unique(uk_accident_data$Speed_limit)
+```
+
+```{r}
+##recode accident severity column
+uk_accident_data <- uk_accident_data %>% mutate(Speed_limit =recode(Speed_limit,
+                                                      `30`="30 Mph",
+                                                      `70`="70 Mph",
+                                                      `40`="40 Mph",
+                                                      `60`="60 Mph",
+                                                      `50`="50 Mph",
+                                                      `20`="20 Mph",
+                                                      `10`="10 Mph",
+                                                      `15`="15 Mph"
+                                                      ))
+
+#uk_accident_data <- uk_accident_data %>% mutate(Speed_limit =recode(Speed_limit,
+                                                      #`30`="30 Speed Limit",
+                                                      #`70`="70 Speed Limit",
+                                                      #`40`="40 Speed Limit",
+                                                      #`60`="60 Speed Limit",
+                                                      #`50`="50 Speed Limit",
+                                                      #`20`="20 Speed Limit",
+                                                      #`10`="10 Speed Limit",
+                                                      #`15`="15 Speed Limit"
+                                                      #))
+unique(uk_accident_data$Speed_limit)
+
+##map street light values
+light_names = c("Daylight: Street light present","Darkeness: No street lighting", "Darkness: Street lights present but unlit","Darkness: Street lights present and lit")
+new_light_names = c("Daylight: Street light present","Darkness: No street lighting","Darkness: No street lighting","Darkness: Street lights present")
+uk_accident_data$Light_Conditions <- mapvalues(uk_accident_data$Light_Conditions, from=light_names, to=new_light_names)
+```
+```{r}
+#dplyr::filter(Year == 2014 & Region.Country == "London") %>%
+uk_accident_spd_limit <- uk_accident_data %>% 
+  dplyr::select(Number_of_Casualties, Year,Speed_limit) %>%
+  dplyr::group_by(Year, Speed_limit) %>% 
+  dplyr::summarize(num_of_casualties = sum(Number_of_Casualties, na.rm = TRUE)) %>%
+  dplyr::arrange(num_of_casualties)
+
+uk_accident_spd_limit
+#save
+write.csv(uk_accident_spd_limit, file = "uk-data/uk_accident_spd_limit.csv", row.names = FALSE)
+```
+
+```{r}
+l <- list(
+  font = list(
+    family = "Arial",
+    size = 16,
+    color = '#4364C5E'),
+  bgcolor = "#d6d8da")
+colors <- c("#6b3969", "#c4446b", "#b77168", "#123429", "#a9368f", "#350a3e", "#242424", "#462c1e")
+
+plot_ly(uk_accident_spd_limit, labels = ~Speed_limit, values = ~num_of_casualties,
+        marker = list(colors = colors,
+                      line = list(color = '#FFFFFF', width = 0.5)),
+        frame = ~Year,
+        textinfo = 'percent',
+        insidetextfont = list(color = '#FFFFFF', size = 14),
+        outsidetextfont = list(color = '#FFFFFF', size = 14),
+        width=1000, height=650) %>% 
+  add_pie(hole = 0.6) %>% 
+  layout(title = "Road Accidents in UK by Speed Limits",  
+         titlefont = list(size = 18, color = '#434C5E', family = "Arial"),
+         showlegend = T,
+         xaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE, color='#434C5E'),
+         yaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE, color='#434C5E'),
+         plot_bgcolor  = "#d6d8da",
+         paper_bgcolor = "#d6d8da",
+         legend = l,
+          margin = list(b = 80, t=80, l=180, r=180)) %>%
+  animation_slider( currentvalue = list(prefix = "Year: ", 
+                                        font = list(color='#434C5E', family = "Cambria", size = 16))
+  ) %>% 
+  animation_opts(1000, easing = "elastic", redraw = FALSE)
+
+##['lightslategray', 'crimson', 'darkcyan', 'darkgoldenrod', 'cornsilk', 'turquoise', 'limegreen', \
+##'darkorchid', 'palevioletred', 'forestgreen', 'silver', 'lightsteelblue']
+```
+```{r}
+uk_acc_long_lat <- uk_accident_data %>% 
+  dplyr::group_by(Year, Region.Country) %>% 
+  dplyr::summarise(latitude = mean(Latitude), longitude = mean(Longitude)) %>% 
+  dplyr::arrange(desc(Year))
+
+uk_acc_long_lat
+```
+
+
+```{r}
+# define center of map
+lat_center <- as.numeric(mean(uk_accident_data[which((uk_accident_data$Year == 2006) & (uk_accident_data$Region.Country == "London")),]$Latitude))
+long_center <- as.numeric(mean(uk_accident_data[which((uk_accident_data$Year == 2006) & (uk_accident_data$Region.Country == "London")),]$Longitude)) 
+
+viz_map <- uk_accident_data %>%
+  filter(Year == 2006 & Region.Country == "London") %>%
+  leaflet() %>% 
+  addTiles() %>% 
+  addProviderTiles(providers$Stamen.TonerLite,
+        options = providerTileOptions(noWrap = TRUE)
+      ) %>% 
+  setView(long_center,lat_center, zoom = 10) %>%
+  addHeatmap(lng=~Longitude,lat=~Latitude,intensity=~Number_of_Casualties,max=100,radius=5,blur=5) %>%
+  addResetMapButton()
+
+viz_map
+##unique(uk_accident_data$Region.Country)
+
+##addProviderTiles(providers$CartoDB.DarkMatter)
+```
+
+```{r}
+uk_shape_file <- rgdal::readOGR("uk_shape_file/2018-MRDB-minimal.shp",
+  layer = "2018-MRDB-minimal")
+PRO <- sp::CRS('+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0')
+uk_shape_file <- spTransform(uk_shape_file, PRO)
+
+lat_center <- uk_acc_long_lat[which((uk_acc_long_lat$Year == 2006) & (uk_acc_long_lat$Region.Country == "London")),]$latitude
+names(uk_acc_long_lat)
+long_center <- uk_acc_long_lat[which((uk_acc_long_lat$Year == 2006) & (uk_acc_long_lat$Region.Country == "London")),]$longitude
+
+names(uk_accident_data)
+##selcols -- Light_Conditions, Road_Type, Speed_limit
+unique(uk_accident_data$Road_Type)
+light_lst <- unique(uk_accident_data$Light_Conditions)
+rd_lst <- unique(uk_accident_data$Road_Type)
+spd_lst <- unique(uk_accident_data$Speed_limit)
+value <- "All Conditions"
+
+if (value %in% light_lst){
+  uk_value_df <- uk_accident_data[which((uk_accident_data$Year == 2006) & (uk_accident_data$Region.Country == "London") & (uk_accident_data$Light_Conditions == value)),]
+} else if (value %in% rd_lst) {
+uk_value_df <- uk_accident_data[which((uk_accident_data$Year == 2006) & (uk_accident_data$Region.Country == "London") & (uk_accident_data$Road_Type == value)),]
+} else if (value %in% spd_lst) {
+uk_value_df <- uk_accident_data[which((uk_accident_data$Year == 2006) & (uk_accident_data$Region.Country == "London") & (uk_accident_data$Speed_limit == value)),]
+} else {
+uk_value_df <- uk_accident_data[which((uk_accident_data$Year == 2006) & (uk_accident_data$Region.Country == "London")),]
+}
+uk_value_df
+
+
+viz_map <- leaflet(data = uk_value_df) %>% 
+  addTiles() %>% 
+  addProviderTiles(providers$Stamen.TonerLite,
+        options = providerTileOptions(noWrap = TRUE)
+      ) %>% 
+  setView(long_center,lat_center, zoom = 10) %>%
+  addHeatmap(lng=~Longitude,lat=~Latitude,intensity=~Number_of_Casualties,max=100,radius=10,blur=5) %>%
+  addPolylines(data = uk_shape_file, stroke = TRUE, weight = 2.0, color = "crimson",
+               fillOpacity = 0.5, smoothFactor = 0.5) %>%
+  addResetMapButton()
+
+viz_map
+```
+```{r}
+write.csv(uk_accident_data, file = "uk-data/uk_accident_data.csv", row.names = FALSE)
+write.csv(uk_acc_long_lat, file = "uk-data/uk_acc_long_lat.csv", row.names = FALSE)
+```
+
+```{r}
+uk_shape_file <- rgdal::readOGR("uk_shape_file/2018-MRDB-minimal.shp",
+  layer = "2018-MRDB-minimal")
+PRO <- sp::CRS('+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0')
+uk_shape_file <- spTransform(uk_shape_file, PRO)
+rd_shp_num <- unique(uk_shape_file$RoadNumber)
+containItems <- function(list1, list2, notfdlist){
+  for(lan in list1) {
+    if (lan %not_in% list2)
+      notfdlist <- c(notfdlist, lan)
+  }
+  return(notfdlist)
+}
+not_fd_in_shp <- containItems(rd_names, rd_shp_num, c())
+not_fd_in_shp
+uk_shp_file2 <- uk_shape_file[which(uk_shape_file$RoadNumber %in% rd_names),]
+
+pal <- colorNumeric("viridis", NULL)
+pop = sample(1:20000, nrow(uk_shape_file), replace=TRUE)
+uk_shape_file$pop = pop
+length(unique(uk_shape_file$RoadNumber))
+shape_map <- leaflet(data = uk_shape_file) %>% 
+  addTiles() %>% 
+  addPolylines(stroke = TRUE, weight = 4.0, color = pal(pop),
+               fillColor = pal(pop),
+               fillOpacity = 1.5, smoothFactor = 0.5) %>%
+  addProviderTiles(providers$Stamen.TonerLite,
+        options = providerTileOptions(noWrap = TRUE)
+      ) %>%
+  setView(long_center,lat_center, zoom = 10) %>%
+  addLegend(pal = pal, values = ~pop, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x))) %>%
+  addResetMapButton()
+
+shape_map
+##addProviderTiles(providers$CartoDB.DarkMatter)
+#devtools::install_github("environmentalinformatics-marburg/mapview", ref = "develop")
+##latticeview(viz_map, shape_map, sync.cursor = FALSE, no.initial.sync = FALSE)
+sync(viz_map, shape_map, 
+     sync = "all", no.initial.sync = TRUE)
+#names(uk_shape_file)
+unique(uk_shape_file$pop)
+```
+```{r}
+uk_casualties_per_accident
+```
+
+```{r}
+uk_json <- rgdal::readOGR("uk_shape_file/map.topojson")
+uk_json_lad <- rgdal::readOGR("uk_shape_file/uk_lad.topojson")
+uk_casualties_per_accident$accident_condition <- "All Conditions"
+##rename region in json df--the order needs to be the same
+json_regions_names = c("North East","North West","Yorkshire and The Humber","East Midlands","West Midlands",
+                       "Eastern","London","South East","South West","Wales","Scotland")
+region_names = c("North East, England","North West, England","Yorkshire and The Humber, England","East Midlands, England","West Midlands, England","East, England","London, England","South East, England","South West, England",
+                 "Wales","Scotland")
+uk_casualties_per_accident$Region.Country <- mapvalues(uk_casualties_per_accident$Region.Country, from= region_names, to=json_regions_names)
+names(uk_json)[names(uk_json) == "EER13NM"] <- "Region.Country"
+#foo$EER13NM <- replace(uk_json$EER13NM, uk_json$EER13NM == "North East", "North East, England")
+uk_json_map <- merge(uk_json, uk_casualties_per_accident, by = "Region.Country", duplicateGeoms = T) #all.y=T
+head(uk_casualties_per_accident, 50)
+##uk_casualties_per_accident$accident_condition <- "All Conditions"
+```
+
+```{r}
+
+#pop = c(5, 10, 6, 2, 8, 12, 4, 15, 20, 14, 17)
+#uk_json$pop = pop
+names(uk_json_map)
+head(uk_json_map[which((uk_json_map$Year == 2014)),],20)
+##& (uk_json_map$Region.Country == "London, England")
+
+pal <- colorNumeric("YlOrRd", uk_json_map[which((uk_json_map$Year == 2014)),]$num_of_casualties)##"YlOrRd"
+leaflet(uk_json_map[which((uk_json_map$Year == 2014)),]) %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  addPolygons(stroke = FALSE, smoothFactor = 0.3, fillOpacity = 0.8,
+    fillColor = ~pal(num_of_casualties),
+    label = ~paste0(Region.Country, ": ", formatC(num_of_casualties, big.mark = ",")),
+    labelOptions = labelOptions(style = list(
+                                  "color" = "black",
+                                  "font-family" = "Cambria",
+                                  "font-style" = "italic",
+                                  "box-shadow" = "3px 3px rgba(0,0,0,0.25)",
+                                  "font-size" = "15px",
+                                  "border-color" = "rgba(0,0,0,0.5)"
+                                  ), direction = "auto")) %>%
+  addLegend(pal = pal, values = ~num_of_casualties, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)), 
+    title = ~paste0("# Road Accidents (", (unique(uk_json_map[which((uk_json_map$Year == 2014)),]$Year)), ")")) %>%
+  addResetMapButton()
+
+##tiles
+##providers$CartoDB.DarkMatter
+##"CartoDB.Positron"
+```
+```{r}
+cam_json_names <- c("East Cambridgeshire", "South Cambridgeshire", "Fenland", "Cambridge", "Huntingdonshire")
+cum_json_names <- c("Carlisle", "South Lakeland", "Allerdale", "Copeland", "Barrow-in-Furness", "Eden")
+derb_json_names <- c("Chesterfield", "High Peak", "Amber Valley", "Derbyshire Dales", "North East Derbyshire", 
+                    "Bolsover", "Erewash", "South Derbyshire")
+dev_json_names <- c("East Devon", "North Devon", "Exeter", "Torridge", "South Hams", "West Devon", "North Dorset",
+                   "Mid Devon", "Teignbridge")
+dor_json_names <- c("East Dorset", "West Dorset")
+estsuss_json_names <- c("Hastings", "Lewes", "Wealden", "Eastbourne", "Rother")
+ess_json_names <- c("Brentwood", "Colchester", "Maldon", "Basildon", "Uttlesford", "Castle Point", "Epping Forest",
+                   "Rochford", "Braintree", "Chelmsford", "Harlow", "Tendring")
+glou_json_names <- c("Forest of Dean", "Cheltenham", "Tewkesbury", "Gloucester", "Cotswold", "Stroud")
+hamp_json_names <- c("Eastleigh", "Hart", "Basingstoke and Deane", "Rushmoor", "Fareham", 
+                    "Havant", "Test Valley", "East Hampshire", "Gosport", "New Forest", "Winchester")
+kent_json_names <- c("Ashford", "Dover", "Sevenoaks", "Canterbury", "Thanet", "Gravesham", "Tonbridge and Malling",
+                    "Dartford", "Maidstone", "Swale", "Tunbridge Wells")
+lanch_json_names <- c("Burnley", "Hyndburn", "Preston", "South Ribble", "Chorley", "Lancaster", "Ribble Valley",
+                     "West Lancashire", "Fylde", "Pendle", "Rossendale", "Wyre")
+leich_json_names <- c("Blaby", "Hinckley and Bosworth", "Charnwood", "Oadby and Wigston", "Melton",
+                     "Harborough", "North West Leicestershire")
+linc_json_names <- c("Lincoln", "South Kesteven", "Boston", "North Kesteven", "West Lindsey", "East Lindsey", 
+                    "South Holland")
+nor_json_names <- c("Broadland", "North Norfolk", "Great Yarmouth", "Norwich", "Breckland", "King's Lynn and West Norfolk", "South Norfolk")
+north_json_names <- c("Corby", "Kettering", "Wellingborough", "Daventry", "Northampton", "East Northamptonshire", 
+                     "South Northamptonshire")
+nyork_json_names <- c("Harrogate", "Scarborough", "Craven", "Richmondshire", "Selby", "Hambleton", "Ryedale")
+nott_json_names <- c("Bassetlaw", "Mansfield", "Broxtowe", "Newark and Sherwood", "Ashfield", "Gedling", 
+                    "Rushcliffe")
+ofd_json_names <- c("Cherwell", "Vale of White Horse", "Oxford", "West Oxfordshire", "South Oxfordshire")
+som_json_names <- c("Sedgemoor", "West Somerset", "South Somerset", "Mendip", "Taunton Deane")
+staff_json_names <- c("Lichfield", "Stafford", "Cannock Chase", "Newcastle-under-Lyme", "Staffordshire Moorlands",
+                     "East Staffordshire", "South Staffordshire", "Tamworth")
+suf_json_names <- c("Babergh", "Mid Suffolk", "Ipswich", "Suffolk Coastal")
+surr_json_names <- c("Waveney", "Guildford", "Runnymede", "Tandridge", "Elmbridge", "Mole Valley", "Spelthorne",
+                    "Waverley", "Epsom and Ewell", "Reigate and Banstead", "Surrey Heath", "Woking")
+warw_json_names <- c("North Warwickshire", "Stratford-on-Avon", "Nuneaton and Bedworth", "Warwick", "Rugby")
+wstsuss_json_names <- c("Arun", "Horsham", "Chichester", "Mid Sussex", "Adur", "Crawley", "Worthing")
+wors_json_names <- c("Bromsgrove", "Worcester", "Malvern Hills", "Wychavon", "Redditch", "Wyre Forest")
+hert_json_names <- c("St Albans", "Stevenage", "Welwyn Hatfield", "East Hertfordshire", "Three Rivers",
+                     "North Hertfordshire", "Watford", "Broxbourne", "Dacorum", "Hertsmere")
+pert_json_names <- c("Perth and Kinross")
+rh_json_names <- c("Rhondda Cynon Taf")
+chseast_json_names <- c("Cheshire East")
+dumm_json_names <- c("Dumfries and Galloway")
+arg_json_names <- c("Argyll and Bute")
+chswst_json_names <- c("Cheshire West and Chester")
+chs_json_names <- c("Christchurch")
+vale_json_names <- c("Vale of Glamorgan")
+dur_json_names <- c("County Durham")
+corn_json_names <- c("Cornwall")
+
+#merge
+lad_list <- list(cam_json_names, cum_json_names, derb_json_names, dev_json_names, dor_json_names, estsuss_json_names, 
+              ess_json_names, glou_json_names, hamp_json_names, kent_json_names, lanch_json_names,
+              leich_json_names, linc_json_names, nor_json_names, north_json_names, nyork_json_names, nott_json_names,
+              ofd_json_names, som_json_names, staff_json_names, suf_json_names, surr_json_names, warw_json_names, 
+              wstsuss_json_names, wors_json_names, hert_json_names, pert_json_names, rh_json_names,
+              chseast_json_names, dumm_json_names, arg_json_names, chswst_json_names, chs_json_names, vale_json_names,
+              dur_json_names, corn_json_names)
+lad_names <- c("Cambridgeshire", "Cumbria", "Derbyshire", "Devon", "Dorset", "East Sussex", "Essex", "Gloucestershire", "Hampshire", "Kent", "Lancashire", "Leicestershire", "Lincolnshire",
+               "Norfolk", "Northamptonshire", "North Yorkshire", "Nottinghamshire", "Oxfordshire", "Somerset",
+               "Staffordshire", "Suffolk", "Surrey", "Warwickshire", "West Sussex", "Worcestershire", "Hertfordshire",
+               "Perth & Kinross", "Rhondda, Cynon, Taff", "East Cheshire", "Dumfries & Galloway", "Argyll & Bute",
+               "West Cheshire", "Bournemouth", "The Vale of Glamorgan", "Durham", "Cornwall excluding Isles of Scilly")
+
+for (i in seq_along(lad_list)) {
+  uk_json_lad[uk_json_lad$LAD13NM %in% unlist(lad_list[i]),"LAD13NM"] <- lad_names[i]
+}
+```
+
+```{r}
+uk_vehicles_lad_summary <- read.csv("uk-data/uk_vehicles_lad_summary.csv",
+                                    header = T, sep = ",")
+uk_accident_lad <- uk_accident_data %>% 
+  dplyr::select(Number_of_Casualties, Year, LAD_Code, Highway.Authority, Region.Country) %>%
+  dplyr::group_by(Year,LAD_Code, Highway.Authority, Region.Country) %>% 
+  dplyr::summarize(num_of_casualties = sum(Number_of_Casualties, na.rm = TRUE)) %>%
+  dplyr::arrange(Region.Country, num_of_casualties)
+names(uk_accident_lad)
+
+lad_df <- unique(uk_vehicles_lad_summary[c("local_authority_code", "local_authority_name")])
+names(lad_df)[names(lad_df) == "local_authority_code"] <- "LAD_Code"
+lad_df
+uk_accident_lad <- merge(uk_accident_lad, lad_df, by = "LAD_Code", incomparables = NA)
+##uk_accident_lad$Region.Country <- mapvalues(uk_accident_lad$Region.Country, from= region_names, #to=json_regions_names)
+uk_accident_lad$accident_condition <- "All Conditions"
+uk_accident_lad
+##dplyr::filter(Year == 2014) %>%
+
+
+
+names(uk_accident_data)
+
+`%not_in%` <- purrr::negate(`%in%`)
+containItems <- function(list1, list2, notfdlist){
+  for(lan in list1) {
+    if (lan %not_in% list2)
+      notfdlist <- c(notfdlist, lan)
+  }
+  return(notfdlist)
+}
+names(uk_json_lad)
+json_lads <- unique(uk_json_lad$LAD13NM)
+json_lads
+names(uk_accident_data)
+lad_codes <- unique(uk_accident_lad$local_authority_name)
+length(json_lads)
+lad_code_not_in_data <- containItems(json_lads, lad_codes, c())
+lad_code_not_in_json <- containItems(lad_codes, json_lads, c())
+lad_code_not_in_data
+unique(uk_accident_data$Highway.Authority)
+lad_codes
+head(uk_json_lad, 20)
+```
+```{r}
+uk_lads <- read.csv("uk_shape_file/UK_LAD21.csv",
+                            header = T, sep = ",")
+names(uk_lads)[names(uk_lads) == "ï..LAD21CD"] <- "LAD_Code"
+uk_lads_new <- uk_lads[which(uk_lads$LAD_Code %in% lad_code_not_in_data),]
+lad_regions_names = c("North East","North West","Yorkshire and The Humber","East Midlands","West Midlands",
+                       "East of England","South East","South West")
+region_names = c("North East, England","North West, England","Yorkshire and The Humber, England","East Midlands, England","West Midlands, England","East, England","South East, England","South West, England")
+
+uk_lads_new$RGN21NM <- mapvalues(uk_lads_new$RGN21NM, from=lad_regions_names, to=region_names)
+names(uk_lads_new)[names(uk_lads_new) == "RGN21NM"] <- "Region.Country"
+unique(uk_lads_new$Region.Country)
+head(uk_lads_new, 10)
+
+##function
+createDf <- function(df1,df2,year){
+  df_new <- df1[,c("Region.Country", "LAD_Code")]
+  min_df <- quantile(df2[which(df2$Year == year),]$num_of_casualties, c(0.25))
+  max_df <- quantile(df2[which(df2$Year == year),]$num_of_casualties, c(0.75))
+  num_cas = sample(min_df:max_df, nrow(df_new), replace=TRUE)
+  df_new$Year <- year
+  df_new$num_of_casualties <- num_cas
+  return(df_new)
+}
+pct <- quantile(uk_accident_lad[which(uk_accident_lad$Year == 2006),]$num_of_casualties, c(0.25))
+pct
+mean(uk_accident_lad[which(uk_accident_lad$Year == 2006),]$num_of_casualties)
+uk_lads_new_2006 <- createDf(uk_lads_new, uk_accident_lad, 2006)
+uk_lads_new_2007 <- createDf(uk_lads_new, uk_accident_lad, 2007)
+uk_lads_new_2009 <- createDf(uk_lads_new, uk_accident_lad, 2009)
+uk_lads_new_2010 <- createDf(uk_lads_new, uk_accident_lad, 2010)
+uk_lads_new_2011 <- createDf(uk_lads_new, uk_accident_lad, 2011)
+uk_lads_new_2012 <- createDf(uk_lads_new, uk_accident_lad, 2012)
+uk_lads_new_2013 <- createDf(uk_lads_new, uk_accident_lad, 2013)
+uk_lads_new_2014 <- createDf(uk_lads_new, uk_accident_lad, 2014)
+
+uk_acc_lads <- do.call("rbind", list(uk_lads_new_2006, uk_lads_new_2007, uk_lads_new_2009, uk_lads_new_2010,
+                                     uk_lads_new_2011, uk_lads_new_2012, uk_lads_new_2013, uk_lads_new_2014,
+                                     uk_accident_lad))
+names(uk_acc_lads)
+uk_acc_lads
+#uk_accident_lad[which(uk_accident_lad$Year == 2006),]
+#uk_accident_data[which(uk_accident_data$LAD_Code %in% lad_code_not_in_data),]
+lad_code_not_in_new <- containItems(lad_code_not_in_data, new_lads, c())
+
+length(lad_code_not_in_new)
+```
+
+
+```{r}
+##names(uk_json_lad)[names(uk_json_lad) == "LAD13CD"] <- "LAD_Code"
+names(uk_json_lad)[names(uk_json_lad) == "LAD13NM"] <- "local_authority_name"
+uk_json_lad_map <- merge(uk_json_lad, uk_accident_lad, by ="local_authority_name", duplicateGeoms = T) #all.y=T
+head(uk_json_lad_map,50)
+unique(uk_json_lad_map$LAD_Code)
+names(uk_json_lad)
+
+pal <- colorNumeric("RdBu", uk_json_lad_map[which((uk_json_lad_map$Year == 2006)),]$num_of_casualties, reverse = TRUE)
+leaflet(uk_json_lad_map[which((uk_json_lad_map$Year == 2006)),]) %>%
+  addTiles() %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  addPolygons(stroke = FALSE, smoothFactor = 0.3, fillOpacity = 1,
+    fillColor = ~pal(num_of_casualties),
+    label = ~paste0(Highway.Authority,"(",Region.Country,")", ": ", formatC(num_of_casualties, big.mark = ",")),
+    labelOptions = labelOptions(style = list(
+                                  "color" = "black",
+                                  "font-family" = "Cambria",
+                                  "font-style" = "italic",
+                                  "box-shadow" = "3px 3px rgba(0,0,0,0.25)",
+                                  "font-size" = "14px",
+                                  "border-color" = "rgba(0,0,0,0.5)"
+                                  ), direction = "auto")) %>%
+  addLegend(pal = pal, values = ~num_of_casualties, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)),
+    title = ~paste0("# Road Accidents (", (unique(uk_json_lad_map[which((uk_json_lad_map$Year == 2014)),]$Year)), ")"))
+```
+```{r}
+unique(uk_accident_data$Region.Country)
+# define center of map
+lat_center <- as.numeric(mean(uk_accident_data[which((uk_accident_data$Year == 2006) & (uk_accident_data$Region.Country == "North West")),]$Latitude))
+long_center <- as.numeric(mean(uk_accident_data[which((uk_accident_data$Year == 2006) & (uk_accident_data$Region.Country == "North West")),]$Longitude))  
+
+
+pal <- colorNumeric("RdBu", uk_json_lad_map[which((uk_json_lad_map$Year == 2006) &
+                                                     (uk_json_lad_map$Region.Country == "North West")),]$num_of_casualties, reverse = TRUE)
+leaflet(uk_json_lad_map[which((uk_json_lad_map$Year == 2006)&
+                                                     (uk_json_lad_map$Region.Country == "North West")),]) %>%
+  addTiles() %>%
+  addProviderTiles(providers$Stamen.TonerLite,
+        options = providerTileOptions(noWrap = TRUE)
+      ) %>% 
+  setView(long_center,lat_center, zoom = 9) %>%
+  addPolygons(stroke = FALSE, smoothFactor = 0.3, fillOpacity = 0.8,
+    fillColor = ~pal(num_of_casualties),
+    label = ~paste0(Highway.Authority,"(",Region.Country,")", ": ", formatC(num_of_casualties, big.mark = ",")),
+    labelOptions = labelOptions(style = list("font-weight" = "normal", 
+                                                            padding = "3px 8px"),
+                                          textsize = "15px",
+                                          direction = "auto"),
+    highlight = highlightOptions(color = "#666",
+                                 bringToFront = TRUE)) %>%
+  addLegend(pal = pal, values = ~num_of_casualties, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)),
+    title = ~paste0("# Road Accidents (", (unique(uk_json_lad_map[which((uk_json_lad_map$Year == 2014)),]$Year)), ")")) %>%
+  addResetMapButton()
+
+unique(uk_accident_data$Region.Country)
+```
+
+```{r}
+##label
+##map$labels <- paste0(
+  ##"<strong> Country: </strong> ",
+  ##map$NAME, "<br/> ",
+  ##"<strong> PM2.5: </strong> ",
+  ##map$PM2.5, "<br/> "
+#) %>%
+  ##lapply(htmltools::HTML)
+
+```
+```{r}
+library(geojsonio)
+##uk shape files
+names(uk_accident_data)
+uk_lad_shp <- st_read("uk_shape_file/Counties_and_Unitary_Authorities_(April_2019)_Boundaries_UK_BFE.shp")
+uk_shp <- st_read("uk_shape_file/NUTS_Level_1_(January_2018)_Boundaries.shp")
+names(uk_lad_shp)[names(uk_lad_shp) == "ctyua19cd"] <- "LAD_Code"
+names(uk_lad_shp)[names(uk_lad_shp) == "ctyua19nm"] <- "LAD_name"
+names(uk_shp)[names(uk_shp) == "nuts118nm"] <- "Region.Country"
+shp_regions_names = c("North East (England)","North West (England)","Yorkshire and The Humber","East Midlands (England)","West Midlands (England)", "East of England","London","South East (England)","South West (England)",
+                      "Wales", "Scotland")
+region_names = c("North East","North West","Yorkshire and The Humber","East Midlands","West Midlands","Eastern","London","South East","South West",
+                 "Wales","Scotland")
+uk_shp$Region.Country <- mapvalues(uk_shp$Region.Country, from=shp_regions_names, to=region_names)
+uk_shp_map <- merge(uk_shp, uk_casualties_per_accident, by = "Region.Country", duplicateGeoms = T) #all.y=T
+uk_lad_shp_map <- merge(uk_lad_shp, uk_accident_lad, by = "LAD_Code", duplicateGeoms = T) #all.y=T
+
+#tmap_mode("view")
+#tmap_leaflet(uk_json) + tm_basemap("Stamen.Watercolor")
+```
+```{r}
+sort_year <- unique(uk_lad_shp_map$Year)
+sort_year <- sort_year[order(sort_year)]
+```
+
+```{r}
+head(uk_lad_shp_map, 50)
+##tmap_mode("view")
+tmap_mode("plot")
+uk_acc_region_animation <- tm_shape(uk_shp_map) +
+  tm_polygons(col = "num_of_casualties", palette = "YlOrRd", n = 8,
+              title = "# Casualties") +
+tm_facets(along = "Year") + tm_style("cobalt") + tm_layout(
+    legend.position = c("right", "top"), legend.text.size = 1.0, 
+    legend.title.size = 1.5, main.title.size = 2.0,
+    legend.height = 0.3)
+tmap_animation(
+  uk_acc_region_animation,filename = "uk_shape_file/uk_reg_acc_animation.gif",
+  delay = 100, width = 800, height = 1000
+  )
+
+uk_acc_region_view <- tm_shape(uk_shp_map) +
+  tm_polygons(col = "num_of_casualties", palette = colorRampPalette(brewer.pal(10,"YlOrRd"))(8), n = 8,
+              title = "# Road Accidents") +
+tm_facets(by = "Year", free.coords = FALSE, ncol=1, nrow=1) + tmap_options(bg.color = "#d6d8da") + tm_layout(
+    legend.position = c("right", "top"), legend.text.size = 1.2, asp = 0.8,
+    legend.title.size = 1.7, main.title.size = 2.0,
+    legend.height = 0.3, panel.labels = sort_year,
+    panel.label.fontface = 2, panel.label.bg.color = "#d6d8da", panel.label.size=2.2, 
+    panel.label.color="#434C5E", frame = FALSE, frame.lwd = NA)
+tmap_animation(
+  uk_acc_region_view, filename = "uk_shape_file/uk_reg_acc_animation2.gif",
+  delay = 75, width = 850, height = 1000
+  )
+
+#[which((uk_shp_map$Year == 2006)),]
+#filename = "uk_shape_file/uk_reg_acc_animation.gif", #tm_style("cobalt")
+#legend.hist = TRUE,legend.hist.width = 1.5, 
+#legend.hist.height = 0.5, 
+
+```
+```{r}
+head(uk_lad_shp_map)
+uk_acc_lad_animat <- tm_shape(uk_lad_shp_map) +
+  tm_polygons(col = "num_of_casualties", palette = colorRampPalette(rev(brewer.pal(10,"RdBu")))(8), n = 8,
+              title = "# Road Accidents") +
+tm_facets(by = "Year", free.coords = FALSE, ncol=1, nrow=1) + tmap_options(bg.color = "#d6d8da") + tm_layout(
+    legend.text.size = 1.2, legend.position = c("right", "top"), asp = 0.8,
+    legend.title.size = 1.7, main.title.size = 2.5,
+    legend.height = 0.3, panel.labels = sort_year,
+    panel.label.fontface = 2, panel.label.bg.color = "#d6d8da", panel.label.size=2.2, 
+    panel.label.color="#434C5E", frame = FALSE, frame.lwd = NA)
+tmap_animation(
+  uk_acc_lad_animat,filename = "uk_shape_file/uk_lad_acc_animation.gif",
+  delay = 75, width = 850, height = 1000
+  )
+
+uk_acc_lad_animat <- tm_shape(uk_lad_shp_map) +
+  tm_polygons(col = "num_of_casualties", palette = colorRampPalette(rev(brewer.pal(10,"RdBu")))(8), n = 8,
+              title = "# Casualties") +
+tm_facets(by = "Year", free.coords = FALSE, ncol=1, nrow=1) + tmap_options(bg.color = "#d6d8da") + tm_layout(
+    legend.text.size = 1.5, legend.position = c("right", "top"), asp = 0.8,
+    legend.title.size = 2.0, main.title.size = 2.5,
+    legend.height = 0.3, panel.labels = sort_year,
+    panel.label.fontface = 2, panel.label.bg.color = "#d6d8da", panel.label.size=2.2, 
+    panel.label.color="#434C5E", frame = FALSE, frame.lwd = NA)
+tmap_animation(
+  uk_acc_lad_animat,
+  delay = 75, width = 850, height = 1000
+  )
+##filename = "uk_shape_file/uk_lad_acc_animation.gif" #tm_style("albatross")
+```
+```{r}
+unique(uk_lad_shp_map$Region.Country)
+uk_lond_shp_map <- uk_lad_shp_map[which((uk_lad_shp_map$Region.Country == "London")),]
+
+uk_acc_lond_animat <- tm_shape(uk_lond_shp_map) +
+  tm_polygons(col = "num_of_casualties", palette = colorRampPalette(rev(brewer.pal(10,"RdBu")))(8), n = 8,
+              title = "# Road Accidents") +
+tm_facets(by = "Year", free.coords = FALSE, ncol=1, nrow=1) + tm_style("cobalt") + tm_layout(
+    legend.text.size = 1.2, legend.position = c("right", "top"), asp = 0.8,
+    legend.title.size = 1.7, main.title.size = 2.5,
+    legend.height = 0.3, panel.labels = sort_year,
+    panel.label.fontface = 2, panel.label.size=2.2, panel.label.bg.color = "#101e3a",
+    panel.label.color="#ffffff", frame = FALSE, frame.lwd = NA)
+tmap_animation(
+  uk_acc_lond_animat, filename = "uk_shape_file/uk_lond_acc_animation2.gif",
+  delay = 75, width = 850, height = 1000
+  )
+##filename = "uk_shape_file/uk_lond_acc_animation2.gif",
+```
+
+
+```{r}
+###lad nmap
+pal <- colorNumeric("RdBu", uk_json_lad_map[which((uk_json_lad_map$Year == 2006)),]$num_of_casualties, reverse = TRUE)
+leaflet(uk_json_lad_map[which((uk_json_lad_map$Year == 2006)),]) %>%
+  addTiles() %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  addPolygons(stroke = FALSE, smoothFactor = 0.3, fillOpacity = 1,
+    fillColor = ~pal(num_of_casualties),
+    label = ~paste0(Highway.Authority,"(",Region.Country,")", ": ", formatC(num_of_casualties, big.mark = ",")),
+    labelOptions = labelOptions(style = list(
+                                  "color" = "black",
+                                  "font-family" = "Cambria",
+                                  "font-style" = "italic",
+                                  "box-shadow" = "3px 3px rgba(0,0,0,0.25)",
+                                  "font-size" = "14px",
+                                  "border-color" = "rgba(0,0,0,0.5)"
+                                  ), direction = "auto")) %>%
+  addLegend(pal = pal, values = ~num_of_casualties, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)),
+    title = ~paste0("# Road Accidents (", (unique(uk_json_lad_map[which((uk_json_lad_map$Year == 2014)),]$Year)), ")")) %>%
+  addResetMapButton()
+names(uk_lad_shp_map)
+```
+
+```{r}
+# define center of map
+lat_center <- as.numeric(mean(uk_accident_data[which((uk_accident_data$Year == 2006) & (uk_accident_data$Region.Country == "North West")),]$Latitude))
+long_center <- as.numeric(mean(uk_accident_data[which((uk_accident_data$Year == 2006) & (uk_accident_data$Region.Country == "North West")),]$Longitude))  
+
+uk_acc_region <- uk_accident_data[which((uk_accident_data$Year == 2006) & (uk_accident_data$Region.Country == "North West")),]
+pal <- colorNumeric("RdBu", uk_acc_region$Number_of_Casualties, reverse = TRUE)
+leaflet(uk_acc_region) %>%
+  addTiles() %>%
+  addProviderTiles(providers$Stamen.TonerLite,
+        options = providerTileOptions(noWrap = TRUE)
+      ) %>% 
+  setView(long_center,lat_center, zoom = 9) %>%
+   addCircleMarkers(radius =10, # size of the dots
+                   fillOpacity = .7, # alpha of the dots
+                   stroke = FALSE, # no outline
+                   popup = ~paste(Highway.Authority),
+                   color = pal,
+                   clusterOptions = markerClusterOptions()) %>%
+  addLegend(pal = pal, values = ~Number_of_Casualties, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)),
+    title = ~paste0("# Casualties (", (unique(uk_json_lad_map[which((uk_json_lad_map$Year == 2014)),]$Year)), ")")) %>%
+  addResetMapButton()
+names(uk_acc_region)
+```
+
+
+
+```{r}
+##recode rural/urban columns
+uk_accident_data <- uk_accident_data %>% mutate(Urban_or_Rural_Area =recode(Urban_or_Rural_Area,
+                                                      `1`="Urban",
+                                                      `2`="Rural",
+                                                      `3`="Unallocated"))#1: "Urban", 2: "Rural", 3: "Unallocated"
+# define center of map
+lat_center <- as.numeric(mean(uk_accident_data[which((uk_accident_data$Year == 2006) & (uk_accident_data$Region.Country == "North West")),]$Latitude))
+long_center <- as.numeric(mean(uk_accident_data[which((uk_accident_data$Year == 2006) & (uk_accident_data$Region.Country == "North West")),]$Longitude)) 
+
+rural_acc_data <- uk_accident_data[which((uk_accident_data$Year == 2006) & (uk_accident_data$Region.Country == "North West") & (uk_accident_data$Urban_or_Rural_Area == "Rural")),]
+urban_acc_data <- uk_accident_data[which((uk_accident_data$Year == 2006) & (uk_accident_data$Region.Country == "North West") & (uk_accident_data$Urban_or_Rural_Area == "Urban")),]
+all_acc_data <- uk_accident_data[which((uk_accident_data$Year == 2006) & (uk_accident_data$Region.Country == "North West") & (uk_accident_data$Urban_or_Rural_Area == "Unallocated")),]
+
+area_map <- leaflet() %>% 
+  addTiles() %>% 
+  addProviderTiles(providers$Stamen.TonerLite,
+        options = providerTileOptions(noWrap = TRUE)
+      ) %>% 
+  setView(long_center,lat_center, zoom = 10) %>%
+  addHeatmap(data=rural_acc_data,
+             lng=~Longitude,lat=~Latitude,intensity=~Number_of_Casualties,max=100,radius=5,blur=5,
+             group = "Rural") %>%
+  addHeatmap(data=urban_acc_data,
+             lng=~Longitude,lat=~Latitude,intensity=~Number_of_Casualties,max=100,radius=5,blur=5,
+             group = "Urban") %>%
+  addHeatmap(data=rural_acc_data,
+             lng=~Longitude,lat=~Latitude,intensity=~Number_of_Casualties,max=100,radius=5,blur=5,
+             group = "Unallocated") %>%
+  addResetMapButton() %>%
+  addLayersControl(overlayGroups = c("Urban", "Rural", "Unallocated"),
+                   options = layersControlOptions(collapsed = FALSE)) %>% 
+  hideGroup(c("Rural", "Unallocated"))
+
+area_map
+unique(uk_accident_data$Urban_or_Rural_Area)
+```
+
+
+```{r}
+##agg
+uk_casualties_per_rd_accident <- uk_accident_data %>% 
+  dplyr::select(Number_of_Casualties, Year, Region.Country, Road_Type) %>%
+  dplyr::group_by(Year, Region.Country, Road_Type) %>% 
+  dplyr::summarize(num_of_casualties = sum(Number_of_Casualties, na.rm = TRUE)) %>%
+  dplyr::arrange(desc(Year), num_of_casualties)
+names(uk_casualties_per_rd_accident)[names(uk_casualties_per_rd_accident) == "Road_Type"] <- "accident_condition"
+names(uk_casualties_per_rd_accident)
+##rd
+uk_json_rd_map <- merge(uk_json, uk_casualties_per_rd_accident, by = "Region.Country", duplicateGeoms = T)
+names(uk_json_rd_map)
+###road nmap
+sg_road_map_table <- uk_json_rd_map[which((uk_json_rd_map$Year == 2014) & (uk_json_rd_map$accident_condition == "Single carriageway")),]
+dl_road_map_table <- uk_json_rd_map[which((uk_json_rd_map$Year == 2014) & (uk_json_rd_map$accident_condition == "Dual carriageway")),]
+rd_road_map_table <- uk_json_rd_map[which((uk_json_rd_map$Year == 2014) & (uk_json_rd_map$accident_condition == "Roundabout")),]
+slp_road_map_table <- uk_json_rd_map[which((uk_json_rd_map$Year == 2014) & (uk_json_rd_map$accident_condition == "Slip road")),]
+
+pal <- colorNumeric("YlOrRd", NULL)
+sg_casualties <- sg_road_map_table$num_of_casualties
+dl_casualties <- dl_road_map_table$num_of_casualties
+rd_casualties <- rd_road_map_table$num_of_casualties
+slp_casualties <- slp_road_map_table$num_of_casualties
+leaflet() %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  addPolygons(data=sg_road_map_table, stroke = FALSE, smoothFactor = 0.3, fillOpacity = 0.8,
+    fillColor = pal(sg_casualties),
+    label = ~paste0(Region.Country, ": ", formatC(num_of_casualties, big.mark = ",")),
+    labelOptions = labelOptions(style = list(
+                                  "color" = "black",
+                                  "font-family" = "Cambria",
+                                  "font-style" = "italic",
+                                  "box-shadow" = "3px 3px rgba(0,0,0,0.25)",
+                                  "font-size" = "15px",
+                                  "border-color" = "rgba(0,0,0,0.5)"
+                                  ), direction = "auto"), group = "Single carriageway") %>%
+  addPolygons(data=dl_road_map_table, stroke = FALSE, smoothFactor = 0.3, fillOpacity = 0.8,
+    fillColor = pal(dl_casualties),
+    label = ~paste0(Region.Country, ": ", formatC(num_of_casualties, big.mark = ",")),
+    labelOptions = labelOptions(style = list(
+                                  "color" = "black",
+                                  "font-family" = "Cambria",
+                                  "font-style" = "italic",
+                                  "box-shadow" = "3px 3px rgba(0,0,0,0.25)",
+                                  "font-size" = "15px",
+                                  "border-color" = "rgba(0,0,0,0.5)"
+                                  ), direction = "auto"), group = "Dual carriageway") %>%
+  addPolygons(data=rd_road_map_table, stroke = FALSE, smoothFactor = 0.3, fillOpacity = 0.8,
+    fillColor = pal(rd_casualties),
+    label = ~paste0(Region.Country, ": ", formatC(num_of_casualties, big.mark = ",")),
+    labelOptions = labelOptions(style = list(
+                                  "color" = "black",
+                                  "font-family" = "Cambria",
+                                  "font-style" = "italic",
+                                  "box-shadow" = "3px 3px rgba(0,0,0,0.25)",
+                                  "font-size" = "15px",
+                                  "border-color" = "rgba(0,0,0,0.5)"
+                                  ), direction = "auto"), group = "Roundabout") %>%
+  addPolygons(data=slp_road_map_table, stroke = FALSE, smoothFactor = 0.3, fillOpacity = 0.8,
+    fillColor = pal(slp_casualties),
+    label = ~paste0(Region.Country, ": ", formatC(num_of_casualties, big.mark = ",")),
+    labelOptions = labelOptions(style = list(
+                                  "color" = "black",
+                                  "font-family" = "Cambria",
+                                  "font-style" = "italic",
+                                  "box-shadow" = "3px 3px rgba(0,0,0,0.25)",
+                                  "font-size" = "15px",
+                                  "border-color" = "rgba(0,0,0,0.5)"
+                                  ), direction = "auto"), group = "Slip road") %>%
+  addLegend(data = sg_road_map_table, pal = pal, values = sg_casualties, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)), 
+    title = ~paste0("# Casualties (", (unique(Year)), ")"),
+    group = "Single carriageway", position = "bottomleft") %>% 
+  addLegend(data = dl_road_map_table, pal = pal, values = dl_casualties, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)), 
+    title = ~paste0("# Casualties (", (unique(Year)), ")"),
+    group = "Dual carriageway", position = "bottomleft") %>% 
+  addLegend(data = rd_road_map_table, pal = pal, values = rd_casualties, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)), 
+    title = ~paste0("# Casualties (", (unique(Year)), ")"),
+    group = "Roundabout", position = "bottomleft") %>% 
+  addLegend(data = slp_road_map_table, pal = pal, values = slp_casualties, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)), 
+    title = ~paste0("# Casualties (", (unique(Year)), ")"),
+    group = "Slip road", position = "bottomleft") %>%
+  addResetMapButton() %>%
+  addLayersControl(overlayGroups = c("Single carriageway", "Dual carriageway", "Roundabout", "Slip road"),
+                   options = layersControlOptions(collapsed = FALSE)) %>% 
+  hideGroup(c("Dual carriageway", "Roundabout", "Slip road"))
+unique(uk_json_rd_map$Road_Type)
+```
+```{r}
+##agg
+uk_cas_per_rd_lad_accident <- uk_accident_data %>% 
+  dplyr::select(Number_of_Casualties, Year, LAD_Code, Highway.Authority, Region.Country, Road_Type) %>%
+  dplyr::group_by(Year, LAD_Code, Highway.Authority, Region.Country, Road_Type) %>% 
+  dplyr::summarize(num_of_casualties = sum(Number_of_Casualties, na.rm = TRUE)) %>%
+  dplyr::arrange(desc(Year), num_of_casualties)
+
+uk_accident_rd_lad <- merge(uk_cas_per_rd_lad_accident, lad_df, by = "LAD_Code", incomparables = NA)
+names(uk_accident_rd_lad)[names(uk_accident_rd_lad) == "Road_Type"] <- "accident_condition"
+
+# define center of map
+lat_center <- as.numeric(mean(uk_accident_data[which((uk_accident_data$Year == 2014) & (uk_accident_data$Region.Country == "North West")),]$Latitude))
+long_center <- as.numeric(mean(uk_accident_data[which((uk_accident_data$Year == 2014) & (uk_accident_data$Region.Country == "North West")),]$Longitude)) 
+
+##rd
+uk_rd_lad_map <- merge(uk_json_lad, uk_accident_rd_lad, by = "local_authority_name", duplicateGeoms = T)
+unique(uk_accident_rd_lad$Region.Country)
+###road nmap
+sg_road_lad_map_table <- uk_rd_lad_map[which((uk_rd_lad_map$Year == 2014) & (uk_rd_lad_map$accident_condition == "Single carriageway") & (uk_rd_lad_map$Region.Country == "North West")),]
+dl_road_lad_map_table <- uk_rd_lad_map[which((uk_rd_lad_map$Year == 2014) & (uk_rd_lad_map$accident_condition == "Dual carriageway") & (uk_rd_lad_map$Region.Country == "North West")),]
+rd_road_lad_map_table <- uk_rd_lad_map[which((uk_rd_lad_map$Year == 2014) & (uk_rd_lad_map$accident_condition == "Roundabout") & (uk_rd_lad_map$Region.Country == "North West")),]
+slp_road_lad_map_table <- uk_rd_lad_map[which((uk_rd_lad_map$Year == 2014) & (uk_rd_lad_map$accident_condition == "Slip road")),]
+
+pal <- colorNumeric("YlOrRd", NULL)
+sg_casualties <- sg_road_lad_map_table$num_of_casualties
+dl_casualties <- dl_road_lad_map_table$num_of_casualties
+rd_casualties <- rd_road_lad_map_table$num_of_casualties
+slp_casualties <- slp_road_lad_map_table$num_of_casualties
+leaflet() %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  setView(long_center,lat_center, zoom = 10) %>%
+  addPolygons(data=sg_road_lad_map_table, stroke = FALSE, smoothFactor = 0.3, fillOpacity = 0.8,
+    fillColor = pal(sg_casualties),
+    label = ~paste0(Region.Country, ": ", formatC(num_of_casualties, big.mark = ",")),
+    labelOptions = labelOptions(style = list(
+                                  "color" = "black",
+                                  "font-family" = "Cambria",
+                                  "font-style" = "italic",
+                                  "box-shadow" = "3px 3px rgba(0,0,0,0.25)",
+                                  "font-size" = "15px",
+                                  "border-color" = "rgba(0,0,0,0.5)"
+                                  ), direction = "auto"), group = "Single carriageway") %>%
+  addPolygons(data=dl_road_lad_map_table, stroke = FALSE, smoothFactor = 0.3, fillOpacity = 0.8,
+    fillColor = pal(dl_casualties),
+    label = ~paste0(Region.Country, ": ", formatC(num_of_casualties, big.mark = ",")),
+    labelOptions = labelOptions(style = list(
+                                  "color" = "black",
+                                  "font-family" = "Cambria",
+                                  "font-style" = "italic",
+                                  "box-shadow" = "3px 3px rgba(0,0,0,0.25)",
+                                  "font-size" = "15px",
+                                  "border-color" = "rgba(0,0,0,0.5)"
+                                  ), direction = "auto"), group = "Dual carriageway") %>%
+  addPolygons(data=rd_road_lad_map_table, stroke = FALSE, smoothFactor = 0.3, fillOpacity = 0.8,
+    fillColor = pal(rd_casualties),
+    label = ~paste0(Region.Country, ": ", formatC(num_of_casualties, big.mark = ",")),
+    labelOptions = labelOptions(style = list(
+                                  "color" = "black",
+                                  "font-family" = "Cambria",
+                                  "font-style" = "italic",
+                                  "box-shadow" = "3px 3px rgba(0,0,0,0.25)",
+                                  "font-size" = "15px",
+                                  "border-color" = "rgba(0,0,0,0.5)"
+                                  ), direction = "auto"), group = "Roundabout") %>%
+  addPolygons(data=slp_road_lad_map_table, stroke = FALSE, smoothFactor = 0.3, fillOpacity = 0.8,
+    fillColor = pal(slp_casualties),
+    label = ~paste0(Region.Country, ": ", formatC(num_of_casualties, big.mark = ",")),
+    labelOptions = labelOptions(style = list(
+                                  "color" = "black",
+                                  "font-family" = "Cambria",
+                                  "font-style" = "italic",
+                                  "box-shadow" = "3px 3px rgba(0,0,0,0.25)",
+                                  "font-size" = "15px",
+                                  "border-color" = "rgba(0,0,0,0.5)"
+                                  ), direction = "auto"), group = "Slip road") %>%
+  addLegend(data = sg_road_lad_map_table, pal = pal, values = sg_casualties, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)), 
+    title = ~paste0("# Casualties (", (unique(Year)), ")"),
+    group = "Single carriageway", position = "bottomleft") %>% 
+  addLegend(data = dl_road_lad_map_table, pal = pal, values = dl_casualties, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)), 
+    title = ~paste0("# Casualties (", (unique(Year)), ")"),
+    group = "Dual carriageway", position = "bottomleft") %>% 
+  addLegend(data = rd_road_lad_map_table, pal = pal, values = rd_casualties, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)), 
+    title = ~paste0("# Casualties (", (unique(Year)), ")"),
+    group = "Roundabout", position = "bottomleft") %>% 
+  addLegend(data = slp_road_lad_map_table, pal = pal, values = slp_casualties, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)), 
+    title = ~paste0("# Casualties (", (unique(Year)), ")"),
+    group = "Slip road", position = "bottomleft") %>%
+  addResetMapButton() %>%
+  addLayersControl(overlayGroups = c("Single carriageway", "Dual carriageway", "Roundabout", "Slip road"),
+                   options = layersControlOptions(collapsed = FALSE)) %>% 
+  hideGroup(c("Dual carriageway", "Roundabout", "Slip road"))
+```
+
+
+```{r}
+uk_casualties_spd_accident <- uk_accident_data %>% 
+  dplyr::select(Number_of_Casualties, Year, Region.Country, Speed_limit) %>%
+  dplyr::group_by(Year, Speed_limit, Region.Country) %>% 
+  dplyr::summarize(num_of_casualties = sum(Number_of_Casualties, na.rm = TRUE)) %>%
+  dplyr::arrange(Region.Country, num_of_casualties)
+
+names(uk_casualties_spd_accident)[names(uk_casualties_spd_accident) == "Speed_limit"] <- "accident_condition"
+```
+
+```{r}
+uk_accident_spd_lad <- uk_accident_data %>% 
+  dplyr::select(Number_of_Casualties, Year, LAD_Code, Highway.Authority, Speed_limit, Region.Country) %>%
+  dplyr::group_by(Year,LAD_Code, Highway.Authority, Speed_limit, Region.Country) %>% 
+  dplyr::summarize(num_of_casualties = sum(Number_of_Casualties, na.rm = TRUE)) %>%
+  dplyr::arrange(Region.Country, num_of_casualties)
+
+uk_accident_spd_lad <- merge(uk_accident_spd_lad, lad_df, by = "LAD_Code", incomparables = NA)
+names(uk_accident_spd_lad)[names(uk_accident_spd_lad) == "Speed_limit"] <- "accident_condition"
+
+names(uk_accident_spd_lad)
+
+uk_spd_lad_shp_map <- merge(uk_json_lad, uk_accident_spd_lad, by = "local_authority_name", duplicateGeoms = T) #all.y=T
+head(uk_spd_lad_shp_map, 10)
+unique(uk_accident_data$Speed_limit)
+```
+```{r}
+###road nmap
+thy_lad_map_table <- uk_spd_lad_shp_map[which((uk_spd_lad_shp_map$Year == 2014) & (uk_spd_lad_shp_map$accident_condition == "30 Speed Limit")),]
+fty_lad_map_table <- uk_spd_lad_shp_map[which((uk_spd_lad_shp_map$Year == 2014) & (uk_spd_lad_shp_map$accident_condition == "40 Speed Limit")),]
+sty_lad_map_table <- uk_spd_lad_shp_map[which((uk_spd_lad_shp_map$Year == 2014) & (uk_spd_lad_shp_map$accident_condition == "60 Speed Limit")),]
+svty_lad_map_table <- uk_spd_lad_shp_map[which((uk_spd_lad_shp_map$Year == 2014) & (uk_spd_lad_shp_map$accident_condition == "70 Speed Limit")),]
+
+pal <- colorNumeric("YlOrRd", NULL)
+thy_casualties <- thy_lad_map_table$num_of_casualties
+fty_casualties <- fty_lad_map_table$num_of_casualties
+sty_casualties <- sty_lad_map_table$num_of_casualties
+svty_casualties <- svty_lad_map_table$num_of_casualties
+
+leaflet() %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  addPolygons(data=thy_lad_map_table, stroke = FALSE, smoothFactor = 0.3, fillOpacity = 0.8,
+    fillColor = pal(thy_casualties),
+    label = ~paste0(Region.Country, ": ", formatC(num_of_casualties, big.mark = ",")),
+    labelOptions = labelOptions(style = list(
+                                  "color" = "black",
+                                  "font-family" = "Cambria",
+                                  "font-style" = "italic",
+                                  "box-shadow" = "3px 3px rgba(0,0,0,0.25)",
+                                  "font-size" = "15px",
+                                  "border-color" = "rgba(0,0,0,0.5)"
+                                  ), direction = "auto"), group = "30 Speed Limit") %>%
+  addPolygons(data=fty_lad_map_table, stroke = FALSE, smoothFactor = 0.3, fillOpacity = 0.8,
+    fillColor = pal(fty_casualties),
+    label = ~paste0(Region.Country, ": ", formatC(num_of_casualties, big.mark = ",")),
+    labelOptions = labelOptions(style = list(
+                                  "color" = "black",
+                                  "font-family" = "Cambria",
+                                  "font-style" = "italic",
+                                  "box-shadow" = "3px 3px rgba(0,0,0,0.25)",
+                                  "font-size" = "15px",
+                                  "border-color" = "rgba(0,0,0,0.5)"
+                                  ), direction = "auto"), group = "40 Speed Limit") %>%
+  addPolygons(data=sty_lad_map_table, stroke = FALSE, smoothFactor = 0.3, fillOpacity = 0.8,
+    fillColor = pal(sty_casualties),
+    label = ~paste0(Region.Country, ": ", formatC(num_of_casualties, big.mark = ",")),
+    labelOptions = labelOptions(style = list(
+                                  "color" = "black",
+                                  "font-family" = "Cambria",
+                                  "font-style" = "italic",
+                                  "box-shadow" = "3px 3px rgba(0,0,0,0.25)",
+                                  "font-size" = "15px",
+                                  "border-color" = "rgba(0,0,0,0.5)"
+                                  ), direction = "auto"), group = "60 Speed Limit") %>%
+  addPolygons(data=svty_lad_map_table, stroke = FALSE, smoothFactor = 0.3, fillOpacity = 0.8,
+    fillColor = pal(svty_casualties),
+    label = ~paste0(Region.Country, ": ", formatC(num_of_casualties, big.mark = ",")),
+    labelOptions = labelOptions(style = list(
+                                  "color" = "black",
+                                  "font-family" = "Cambria",
+                                  "font-style" = "italic",
+                                  "box-shadow" = "3px 3px rgba(0,0,0,0.25)",
+                                  "font-size" = "15px",
+                                  "border-color" = "rgba(0,0,0,0.5)"
+                                  ), direction = "auto"), group = "70 Speed Limit") %>%
+  addLegend(data = thy_lad_map_table, pal = pal, values = thy_casualties, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)), 
+    title = ~paste0("# Casualties (", (unique(Year)), ")"),
+    group = "30 Speed Limit", position = "bottomleft") %>% 
+  addLegend(data = fty_lad_map_table, pal = pal, values = fty_casualties, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)), 
+    title = ~paste0("# Casualties (", (unique(Year)), ")"),
+    group = "40 Speed Limit", position = "bottomleft") %>% 
+  addLegend(data = sty_lad_map_table, pal = pal, values = sty_casualties, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)), 
+    title = ~paste0("# Casualties (", (unique(Year)), ")"),
+    group = "60 Speed Limit", position = "bottomleft") %>% 
+  addLegend(data = svty_lad_map_table, pal = pal, values = svty_casualties, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)), 
+    title = ~paste0("# Casualties (", (unique(Year)), ")"),
+    group = "70 Speed Limit", position = "bottomleft") %>% 
+  addResetMapButton() %>%
+  addLayersControl(overlayGroups = c("30 Speed Limit", "40 Speed Limit", "60 Speed Limit", "70 Speed Limit"),
+                   options = layersControlOptions(collapsed = FALSE)) %>% 
+  hideGroup(c("40 Speed Limit", "60 Speed Limit", "70 Speed Limit"))
+```
+```{r}
+#
+#uk_spd_shp_map <- merge(uk_lad_shp, uk_accident_spd_lad, by = "LAD_Code", duplicateGeoms = T)
+head(uk_spd_lad_shp_map, 10)
+names(uk_spd_lad_shp_map)
+unique(uk_spd_shp_map$Region.Country)
+# define center of map
+lat_center <- as.numeric(mean(uk_accident_data[which((uk_accident_data$Year == 2009) & (uk_accident_data$Region.Country == "North West")),]$Latitude))
+long_center <- as.numeric(mean(uk_accident_data[which((uk_accident_data$Year == 2009) & (uk_accident_data$Region.Country == "North West")),]$Longitude)) 
+
+###road nmap
+thy_lad_table <- uk_spd_lad_shp_map[which((uk_spd_lad_shp_map$Year == 2009) & (uk_spd_lad_shp_map$accident_condition == "30 Speed Limit") & (uk_spd_lad_shp_map$Region.Country == "North West")),]
+fty_lad_table <- uk_spd_lad_shp_map[which((uk_spd_lad_shp_map$Year == 2009) & (uk_spd_lad_shp_map$accident_condition == "40 Speed Limit") & (uk_spd_lad_shp_map$Region.Country == "North West")),]
+sty_lad_table <- uk_spd_lad_shp_map[which((uk_spd_lad_shp_map$Year == 2009) & (uk_spd_lad_shp_map$Speed_limitaccident_condition == "60 Speed Limit") & (uk_spd_lad_shp_map$Region.Country == "North West")),]
+svty_lad_table <- uk_spd_lad_shp_map[which((uk_spd_lad_shp_map$Year == 2009) & (uk_spd_lad_shp_map$accident_condition == "70 Speed Limit") & (uk_spd_lad_shp_map$Region.Country == "North West")),]
+
+pal <- colorNumeric("YlOrRd", NULL)
+thy_casualties <- thy_lad_table$num_of_casualties
+fty_casualties <- fty_lad_table$num_of_casualties
+sty_casualties <- sty_lad_table$num_of_casualties
+svty_casualties <- svty_lad_table$num_of_casualties
+
+leaflet() %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  setView(long_center,lat_center, zoom = 10) %>%
+  addPolygons(data=thy_lad_table, stroke = FALSE, smoothFactor = 0.3, fillOpacity = 0.8,
+    fillColor = pal(thy_casualties),
+    label = ~paste0(Highway.Authority,"(",Region.Country,")", ": ", formatC(num_of_casualties, big.mark = ",")),
+    labelOptions = labelOptions(style = list("font-weight" = "normal", 
+                                                            padding = "3px 8px"),
+                                          textsize = "15px",
+                                          direction = "auto"), group = "30") %>%
+  addPolygons(data=fty_lad_table, stroke = FALSE, smoothFactor = 0.3, fillOpacity = 0.8,
+    fillColor = pal(fty_casualties),
+    label = ~paste0(Highway.Authority,"(",Region.Country,")", ": ", formatC(num_of_casualties, big.mark = ",")),
+    labelOptions = labelOptions(style = list("font-weight" = "normal", 
+                                                            padding = "3px 8px"),
+                                          textsize = "15px",
+                                          direction = "auto"), group = "40") %>%
+  addPolygons(data=sty_lad_table, stroke = FALSE, smoothFactor = 0.3, fillOpacity = 0.8,
+    fillColor = pal(sty_casualties),
+    label = ~paste0(Highway.Authority,"(",Region.Country,")", ": ", formatC(num_of_casualties, big.mark = ",")),
+    labelOptions = labelOptions(style = list("font-weight" = "normal", 
+                                                            padding = "3px 8px"),
+                                          textsize = "15px",
+                                          direction = "auto"), group = "60") %>%
+  addPolygons(data=svty_lad_table, stroke = FALSE, smoothFactor = 0.3, fillOpacity = 0.8,
+    fillColor = pal(svty_casualties),
+    label = ~paste0(Highway.Authority,"(",Region.Country,")", ": ", formatC(num_of_casualties, big.mark = ",")),
+    labelOptions = labelOptions(style = list("font-weight" = "normal", 
+                                                            padding = "3px 8px"),
+                                          textsize = "15px",
+                                          direction = "auto"), group = "70") %>%
+  addLegend(data = thy_lad_table, pal = pal, values = thy_casualties, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)), 
+    title = ~paste0("# Casualties (", (unique(Year)), ")"),
+    group = "30", position = "bottomleft") %>% 
+  addLegend(data = fty_lad_table, pal = pal, values = fty_casualties, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)), 
+    title = ~paste0("# Casualties (", (unique(Year)), ")"),
+    group = "40", position = "bottomleft") %>% 
+  addLegend(data = sty_lad_table, pal = pal, values = sty_casualties, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)), 
+    title = ~paste0("# Casualties (", (unique(Year)), ")"),
+    group = "60", position = "bottomleft") %>% 
+  addLegend(data = svty_lad_table, pal = pal, values = svty_casualties, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)), 
+    title = ~paste0("# Casualties (", (unique(Year)), ")"),
+    group = "70", position = "bottomleft") %>% 
+  addResetMapButton() %>%
+  addLayersControl(overlayGroups = c("30", "40", "60", "70"),
+                   options = layersControlOptions(collapsed = FALSE)) %>% 
+  hideGroup(c("40", "60", "70"))
+```
+
+```{r}
+uk_casualties_light_accident <- uk_accident_data %>% 
+  dplyr::select(Number_of_Casualties, Year, Light_Conditions, Region.Country) %>%
+  dplyr::group_by(Year, Light_Conditions, Region.Country) %>% 
+  dplyr::summarize(num_of_casualties = sum(Number_of_Casualties, na.rm = TRUE)) %>%
+  dplyr::arrange(Region.Country, desc(num_of_casualties))
+
+names(uk_casualties_light_accident)[names(uk_casualties_light_accident) == "Light_Conditions"] <- "accident_condition"
+uk_casualties_light_accident
+
+##concatenate all casualties per year, region
+uk_casualties_per_accident <- do.call("rbind", list(uk_casualties_per_accident, uk_casualties_per_rd_accident, uk_casualties_spd_accident, uk_casualties_light_accident))
+uk_casualties_per_accident
+```
+```{r}
+uk_casualties_per_accident[which((uk_casualties_per_accident$Year == 2014) & (uk_casualties_per_accident$accident_condition == "All Conditions")),]
+```
+
+```{r}
+unique(uk_accident_data$Light_Conditions)
+names(uk_accident_data)
+uk_accident_light_lad <- uk_accident_data %>% 
+  dplyr::select(Number_of_Casualties, Year, LAD_Code, Highway.Authority, Light_Conditions, Region.Country) %>%
+  dplyr::group_by(Year,LAD_Code, Highway.Authority, Light_Conditions, Region.Country) %>% 
+  dplyr::summarize(num_of_casualties = sum(Number_of_Casualties, na.rm = TRUE)) %>%
+  dplyr::arrange(Region.Country, desc(num_of_casualties))
+
+uk_accident_light_lad <- merge(uk_accident_light_lad, lad_df, by = "LAD_Code", incomparables = NA)
+names(uk_accident_light_lad)[names(uk_accident_light_lad) == "Light_Conditions"] <- "accident_condition"
+
+names(uk_accident_light_lad)
+
+uk_light_shp_map <- merge(uk_json_lad, uk_accident_light_lad, by = "local_authority_name", duplicateGeoms = T)
+
+uk_accident_light_lad
+#uk_light_shp_map <- merge(uk_lad_shp, uk_accident_light_lad, by = "LAD_Code", duplicateGeoms = T)
+head(uk_light_shp_map, 5)
+names(uk_accident_data)
+```
+```{r}
+# define center of map
+lat_center <- as.numeric(mean(uk_accident_data[which((uk_accident_data$Year == 2009) & (uk_accident_data$Region.Country == "North West")),]$Latitude))
+long_center <- as.numeric(mean(uk_accident_data[which((uk_accident_data$Year == 2009) & (uk_accident_data$Region.Country == "North West")),]$Longitude)) 
+
+###light nmap
+dklight_lad_table <- uk_light_shp_map[which((uk_light_shp_map$Year == 2009) & (uk_light_shp_map$accident_condition == "Darkness: Street lights present") & (uk_light_shp_map$Region.Country == "North West")),]
+dylight_lad_table <- uk_light_shp_map[which((uk_light_shp_map$Year == 2009) & (uk_light_shp_map$accident_condition == "Daylight: Street light present") & (uk_light_shp_map$Region.Country == "North West")),]
+dknolight_lad_table <- uk_light_shp_map[which((uk_light_shp_map$Year == 2009) & (uk_light_shp_map$accident_condition == "Darkness: No street lighting") & (uk_light_shp_map$Region.Country == "North West")),]
+
+pal <- colorNumeric("YlOrRd", NULL)
+dklight_casualties <- dklight_lad_table$num_of_casualties
+dylight_casualties <- dylight_lad_table$num_of_casualties
+dknolight_casualties <- dknolight_lad_table$num_of_casualties
+
+leaflet() %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  setView(long_center,lat_center, zoom = 10) %>%
+  addPolygons(data=dklight_lad_table, stroke = FALSE, smoothFactor = 0.3, fillOpacity = 0.8,
+    fillColor = pal(dklight_casualties),
+    label = ~paste0(Highway.Authority,"(",Region.Country,")", ": ", formatC(num_of_casualties, big.mark = ",")),
+    labelOptions = labelOptions(style = list(
+                                  "color" = "black",
+                                  "font-family" = "Cambria",
+                                  "font-style" = "italic",
+                                  "box-shadow" = "3px 3px rgba(0,0,0,0.25)",
+                                  "font-size" = "15px",
+                                  "border-color" = "rgba(0,0,0,0.5)"
+                                  ), direction = "auto"), group = "Darkness: Street lights present") %>%
+  addPolygons(data=dylight_lad_table, stroke = FALSE, smoothFactor = 0.3, fillOpacity = 0.8,
+    fillColor = pal(dylight_casualties),
+    label = ~paste0(Highway.Authority,"(",Region.Country,")", ": ", formatC(num_of_casualties, big.mark = ",")),
+    labelOptions = labelOptions(style = list(
+                                  "color" = "black",
+                                  "font-family" = "Cambria",
+                                  "font-style" = "italic",
+                                  "box-shadow" = "3px 3px rgba(0,0,0,0.25)",
+                                  "font-size" = "15px",
+                                  "border-color" = "rgba(0,0,0,0.5)"
+                                  ), direction = "auto"), group = "Daylight: Street light present") %>%
+  addPolygons(data=dknolight_lad_table, stroke = FALSE, smoothFactor = 0.3, fillOpacity = 0.8,
+    fillColor = pal(dknolight_casualties),
+    label = ~paste0(Highway.Authority,"(",Region.Country,")", ": ", formatC(num_of_casualties, big.mark = ",")),
+    labelOptions = labelOptions(style = list(
+                                  "color" = "black",
+                                  "font-family" = "Cambria",
+                                  "font-style" = "italic",
+                                  "box-shadow" = "3px 3px rgba(0,0,0,0.25)",
+                                  "font-size" = "15px",
+                                  "border-color" = "rgba(0,0,0,0.5)"
+                                  ), direction = "auto"), group = "Darkness: No street lighting") %>%
+  addLegend(data = dklight_lad_table, pal = pal, values = dklight_casualties, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)), 
+    title = ~paste0("# Casualties (", (unique(Year)), ")"),
+    group = "Darkness: Street lights present", position = "bottomleft") %>% 
+  addLegend(data = dylight_lad_table, pal = pal, values = dylight_casualties, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)), 
+    title = ~paste0("# Casualties (", (unique(Year)), ")"),
+    group = "Daylight: Street light present", position = "bottomleft") %>% 
+  addLegend(data = dknolight_lad_table, pal = pal, values = dknolight_casualties, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)), 
+    title = ~paste0("# Casualties (", (unique(Year)), ")"),
+    group = "Darkness: No street lighting", position = "bottomleft") %>% 
+  addPolygons(data=thy_lad_table, stroke = FALSE, smoothFactor = 0.3, fillOpacity = 0.8,
+    fillColor = pal(thy_casualties),
+    label = ~paste0(Highway.Authority,"(",Region.Country,")", ": ", formatC(num_of_casualties, big.mark = ",")),
+    labelOptions = labelOptions(style = list("font-weight" = "normal", 
+                                                            padding = "3px 8px"),
+                                          textsize = "15px",
+                                          direction = "auto"), group = "30") %>%
+  addPolygons(data=fty_lad_table, stroke = FALSE, smoothFactor = 0.3, fillOpacity = 0.8,
+    fillColor = pal(fty_casualties),
+    label = ~paste0(Highway.Authority,"(",Region.Country,")", ": ", formatC(num_of_casualties, big.mark = ",")),
+    labelOptions = labelOptions(style = list("font-weight" = "normal", 
+                                                            padding = "3px 8px"),
+                                          textsize = "15px",
+                                          direction = "auto"), group = "40") %>%
+  addPolygons(data=sty_lad_table, stroke = FALSE, smoothFactor = 0.3, fillOpacity = 0.8,
+    fillColor = pal(sty_casualties),
+    label = ~paste0(Highway.Authority,"(",Region.Country,")", ": ", formatC(num_of_casualties, big.mark = ",")),
+    labelOptions = labelOptions(style = list("font-weight" = "normal", 
+                                                            padding = "3px 8px"),
+                                          textsize = "15px",
+                                          direction = "auto"), group = "60") %>%
+  addPolygons(data=svty_lad_table, stroke = FALSE, smoothFactor = 0.3, fillOpacity = 0.8,
+    fillColor = pal(svty_casualties),
+    label = ~paste0(Highway.Authority,"(",Region.Country,")", ": ", formatC(num_of_casualties, big.mark = ",")),
+    labelOptions = labelOptions(style = list("font-weight" = "normal", 
+                                                            padding = "3px 8px"),
+                                          textsize = "15px",
+                                          direction = "auto"), group = "70") %>%
+  addLegend(data = thy_lad_table, pal = pal, values = thy_casualties, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)), 
+    title = ~paste0("# Casualties (", (unique(Year)), ")"),
+    group = "30", position = "bottomleft") %>% 
+  addLegend(data = fty_lad_table, pal = pal, values = fty_casualties, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)), 
+    title = ~paste0("# Casualties (", (unique(Year)), ")"),
+    group = "40", position = "bottomleft") %>% 
+  addLegend(data = sty_lad_table, pal = pal, values = sty_casualties, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)), 
+    title = ~paste0("# Casualties (", (unique(Year)), ")"),
+    group = "60", position = "bottomleft") %>% 
+  addLegend(data = svty_lad_table, pal = pal, values = svty_casualties, opacity = 1.0,
+    labFormat = labelFormat(transform = function(x) round(x)), 
+    title = ~paste0("# Casualties (", (unique(Year)), ")"),
+    group = "70", position = "bottomleft") %>% 
+  addResetMapButton() %>%
+  addLayersControl(overlayGroups = c("Darkness: Street lights present", "Daylight: Street light present", "Darkness: No street lighting", "30", "40", "60", "70"),
+                   options = layersControlOptions(collapsed = FALSE)) %>% 
+  hideGroup(c("Daylight: Street light present", "Darkness: No street lighting","30", "40", "60", "70"))
+```
+```{r}
+##concatenate all casualties per year, region
+uk_accident_lad <- do.call("rbind", list(uk_accident_lad, uk_accident_rd_lad, uk_accident_spd_lad, uk_accident_light_lad))
+
+tail(uk_accident_lad, 5)
+unique(uk_accident_lad$accident_condition)
+unique(uk_vehicles_lad_summary$vehicles_names)
+head(uk_casualties_per_accident)
+
+write.csv(uk_casualties_per_accident, file = "uk-data/uk_casualties_per_accident.csv", row.names = FALSE)
+write.csv(uk_accident_lad, file = "uk-data/uk_accident_lad.csv", row.names = FALSE)
+#uk_accident_lad
+
+uk_casualties_per_accident[which((uk_casualties_per_accident$Year == 2014) & (uk_casualties_per_accident$accident_condition == "Daylight: Street light present")),]
+
+uk_accident_lad[which((uk_accident_lad$Year == 2014) & (uk_accident_lad$accident_condition == "All Conditions")),]
+```
+
